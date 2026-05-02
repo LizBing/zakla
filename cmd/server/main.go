@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -51,8 +52,15 @@ func handle(conn net.Conn) {
 			}
 
 			fmt.Printf("Received Handshake(Protocol %v, Next State: %x)\n", hs.ProtocolVersion, hs.NextState)
-			if hs.NextState == 0x01 {
+			switch hs.NextState {
+			case 0x01:
 				handleStatus(conn)
+
+			case 0x02:
+				handleLogin(conn)
+
+			default:
+				fmt.Println("Unimplemented or unknown state: ", hs.NextState)
 			}
 
 		default:
@@ -62,40 +70,45 @@ func handle(conn net.Conn) {
 }
 
 func handleStatus(conn net.Conn) error {
-	resp := protocol.StatusResponse{}
-	resp.Version.Name = "Zakla 26.1"
-	resp.Version.Protocol = 775
-	resp.Players.Max = 10
-	resp.Players.Online = 0
-	resp.Description.Text = "Have a nice day!"
-	jsonStr := resp.Marshal()
-
-	fmt.Println(jsonStr)
-
 	// Flush buffer.
 	network.ReadVarInt(conn)
 	network.ReadVarInt(conn)
 
-	var packetBody bytes.Buffer
-	network.WriteVarInt(&packetBody, 0x00)
-	network.WriteString(&packetBody, jsonStr)
-
-	network.WriteVarInt(conn, packetBody.Len())
-	conn.Write(packetBody.Bytes())
+	cl := func(body *bytes.Buffer) {
+		network.WriteString(body, protocol.StatusResponseStr())
+	}
+	network.SendPacket(conn, 0x00, cl)
 
 	pingLen, _ := network.ReadVarInt(conn)
 	pingID, _ := network.ReadVarInt(conn)
-	if pingID == 0x01 {
-		payload := make([]byte, pingLen-1)
-		io.ReadFull(conn, payload)
-
-		var pongBody bytes.Buffer
-		network.WriteVarInt(&pongBody, 0x01)
-		pongBody.Write(payload)
-
-		network.WriteVarInt(conn, pingLen)
-		conn.Write(pongBody.Bytes())
+	if pingID != 0x01 {
+		e := fmt.Sprintf("Unknown Ping ID: %x\n", pingID)
+		return errors.New(e)
 	}
 
+	cl = func(body *bytes.Buffer) {
+		payload := make([]byte, pingLen-1)
+		io.ReadFull(conn, payload)
+		body.Write(payload)
+	}
+	network.SendPacket(conn, 0x01, cl)
+
 	return nil
+}
+
+func handleLogin(conn net.Conn) {
+	network.ReadVarInt(conn)
+	network.ReadVarInt(conn)
+
+	ls := protocol.LoginStartPacket{}
+	ls.Decode(conn)
+
+	fmt.Printf("Player %s(UUID: %X) is logining in...\n", ls.Name, ls.UUID)
+
+	cl := func(body *bytes.Buffer) {
+		body.Write(ls.UUID[:])
+		network.WriteString(body, ls.Name)
+		network.WriteVarInt(body, 0)
+	}
+	network.SendPacket(conn, 0x02, cl)
 }

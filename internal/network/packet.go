@@ -2,6 +2,7 @@
 package network
 
 import (
+	"bytes"
 	"errors"
 	"io"
 )
@@ -78,3 +79,18 @@ func WriteString(w io.Writer, s string) error {
 	return err
 }
 
+func SendPacket(w io.Writer, id int, fn func(*bytes.Buffer)) error {
+	var body bytes.Buffer
+	WriteVarInt(&body, id)
+	fn(&body)
+
+	var packet bytes.Buffer
+	err := WriteVarInt(&packet, body.Len())
+	if err != nil { return err }
+	_, err = packet.Write(body.Bytes())	
+	if err != nil { return err }
+
+	_, err = w.Write(packet.Bytes())
+
+	return nil
+}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 )
 
-type StatusResponse struct {
+type statusResponse struct {
 	Version struct {
 		Name     string `json:"name"`
 		Protocol int    `json:"protocol"`
@@ -26,7 +26,14 @@ type StatusResponse struct {
 	Favicon string `json:"favicon,omitempty"`
 }
 
-func (s *StatusResponse) Marshal() string {
+func StatusResponseStr() string {
+	s := statusResponse{}
+	s.Version.Name = "Zakla 26.1"
+	s.Version.Protocol = 775
+	s.Players.Max = 10
+	s.Players.Online = 0
+	s.Description.Text = "Have a nice day!"
+
 	data, _ := json.Marshal(s)
 	return string(data)
 }
