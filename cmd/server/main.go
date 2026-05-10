@@ -3,9 +3,7 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"zakla/internal/network"
 	"zakla/internal/protocol"
@@ -33,19 +31,15 @@ func handle(conn net.Conn) {
 	defer conn.Close()
 
 	for {
-		length, err := network.ReadVarInt(conn)
-		if err != nil {
-			break
-		}
-		packetID, err := network.ReadVarInt(conn)
+		packet, err := network.ReceivePacket(conn)
 		if err != nil {
 			break
 		}
 
-		switch packetID {
+		switch packet.ID {
 		case 0x00:
-			hs := &protocol.HandshakePacket{}
-			err := hs.Decode(conn)
+			hs := &protocol.HandshakePacketData{}
+			err := hs.Decode(packet)
 			if err != nil {
 				fmt.Println("Failed to handshake: ", err)
 				break
@@ -64,44 +58,33 @@ func handle(conn net.Conn) {
 			}
 
 		default:
-			fmt.Printf("Unknown packet(len: %v, ID: %v).\n", length, packetID)
+			fmt.Printf("Unknown packet(len: %v, ID: %v).\n", packet.Length, packet.ID)
 		}
 	}
 }
 
 func handleStatus(conn net.Conn) error {
 	// Flush buffer.
-	network.ReadVarInt(conn)
-	network.ReadVarInt(conn)
+	network.ReceivePacket(conn)
 
-	cl := func(body *bytes.Buffer) {
-		network.WriteString(body, protocol.StatusResponseStr())
-	}
-	network.SendPacket(conn, 0x00, cl)
+	protocol.SendStatusResponsePacket(conn)
 
-	pingLen, _ := network.ReadVarInt(conn)
-	pingID, _ := network.ReadVarInt(conn)
-	if pingID != 0x01 {
-		e := fmt.Sprintf("Unknown Ping ID: %x\n", pingID)
-		return errors.New(e)
+	pongPacket, err := network.ReceivePacket(conn)
+	if err != nil {
+		return err
 	}
 
-	cl = func(body *bytes.Buffer) {
-		payload := make([]byte, pingLen-1)
-		io.ReadFull(conn, payload)
-		body.Write(payload)
-	}
-	network.SendPacket(conn, 0x01, cl)
-
-	return nil
+	return network.SendPacket(conn, pongPacket)
 }
 
 func handleLogin(conn net.Conn) {
-	network.ReadVarInt(conn)
-	network.ReadVarInt(conn)
+	lsPacket, err := network.ReceivePacket(conn)
+	if err != nil {
+		return
+	}
 
-	ls := protocol.LoginStartPacket{}
-	ls.Decode(conn)
+	ls := protocol.LoginStartPacketData{}
+	ls.Decode(lsPacket)
 
 	fmt.Printf("Player %s(UUID: %X) is logining in...\n", ls.Name, ls.UUID)
 
@@ -110,5 +93,5 @@ func handleLogin(conn net.Conn) {
 		network.WriteString(body, ls.Name)
 		network.WriteVarInt(body, 0)
 	}
-	network.SendPacket(conn, 0x02, cl)
+	network.CreateAndSendPacket(conn, 0x02, cl)
 }

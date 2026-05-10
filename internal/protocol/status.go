@@ -1,7 +1,10 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"zakla/internal/network"
 )
 
 type statusResponse struct {
@@ -26,7 +29,7 @@ type statusResponse struct {
 	Favicon string `json:"favicon,omitempty"`
 }
 
-func StatusResponseStr() string {
+func statusResponseStr() string {
 	s := statusResponse{}
 	s.Version.Name = "Zakla 26.1"
 	s.Version.Protocol = 775
@@ -37,3 +40,12 @@ func StatusResponseStr() string {
 	data, _ := json.Marshal(s)
 	return string(data)
 }
+
+func SendStatusResponsePacket(w io.Writer) error {
+	cl := func(body *bytes.Buffer) {
+		network.WriteString(body, statusResponseStr())
+	}
+
+	return network.CreateAndSendPacket(w, 0x00, cl)
+}
+

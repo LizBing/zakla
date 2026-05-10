@@ -1,21 +1,23 @@
-// Package protocal: MC Server Protocal
+// Package protocol: MC Server Protocal
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"zakla/internal/network"
 )
 
-type HandshakePacket struct {
+type HandshakePacketData struct {
 	ProtocolVersion int
 	ServerAddr string
 	ServerPort uint16
 	NextState int
 }
 
-func(hs *HandshakePacket) Decode(r io.Reader) error {
+func(hs *HandshakePacketData) Decode(packet *network.Packet) error {
+	r := bytes.NewReader(packet.Data)
+
 	version, err := network.ReadVarInt(r)
 	if err != nil { return err }
 	hs.ProtocolVersion = version
@@ -34,7 +36,7 @@ func(hs *HandshakePacket) Decode(r io.Reader) error {
 	return nil
 }
 
-func(hs *HandshakePacket) String() string {
+func(hs *HandshakePacketData) String() string {
 	return fmt.Sprintf("Handshake:\n\tVersion: %v\n\tServer: %s:%v\n\tNext State: %x", hs.ProtocolVersion, hs.ServerAddr, hs.ServerPort, hs.NextState)
 }
 

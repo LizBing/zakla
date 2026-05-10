@@ -1,16 +1,19 @@
 package protocol
 
 import (
+	"bytes"
 	"io"
 	"zakla/internal/network"
 )
 
-type LoginStartPacket struct {
+type LoginStartPacketData struct {
 	Name string
 	UUID [16]byte
 }
 
-func (p *LoginStartPacket) Decode(r io.Reader) error {
+func (p *LoginStartPacketData) Decode(packet *network.Packet) error {
+	r := bytes.NewReader(packet.Data)
+
 	name, err := network.ReadString(r)
 	if err != nil {
 		return err
