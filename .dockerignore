@@ -1,0 +1,6 @@
+bin/
+logs/
+*.log
+.DS_Store
+docs/
+scripts/gen_*.py

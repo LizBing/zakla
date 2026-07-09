@@ -1,0 +1,12 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    image: zakla/mc-server:26.2
+    container_name: mc-server
+    ports:
+      - "25565:25565"
+    volumes:
+      - ./config/config.toml:/app/config/config.toml:ro
+    restart: unless-stopped
