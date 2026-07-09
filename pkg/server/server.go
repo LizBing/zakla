@@ -30,17 +30,23 @@ type Server struct {
 	mu      sync.RWMutex
 	players map[protocol.UUID]*Player
 
+	world *World
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// New creates a server with the given configuration.
+// New creates a server with the given configuration and a fresh world with the
+// spawn platform pre-filled.
 func New(cfg *config.Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
+	world := NewWorld()
+	world.fillSpawnPlatform()
 	return &Server{
 		cfg:     cfg,
 		players: make(map[protocol.UUID]*Player),
+		world:   world,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -115,5 +121,20 @@ func (s *Server) broadcastChat(text string) {
 	s.mu.RUnlock()
 	for _, c := range conns {
 		_ = c.WritePacket(protocol.PlayIDSystemChat, payload)
+	}
+}
+
+// broadcastBlockUpdate sends a single block change to every online player
+// (including the initiator), so all clients stay in sync with server state.
+func (s *Server) broadcastBlockUpdate(pos protocol.Position, stateID int32) {
+	payload := protocol.EncodeBlockUpdate(pos, stateID)
+	s.mu.RLock()
+	conns := make([]*mcnet.Connection, 0, len(s.players))
+	for _, p := range s.players {
+		conns = append(conns, p.conn)
+	}
+	s.mu.RUnlock()
+	for _, c := range conns {
+		_ = c.WritePacket(protocol.PlayIDBlockUpdate, payload)
 	}
 }

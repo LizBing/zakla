@@ -9,9 +9,10 @@
 | 完整协议栈（PVN 776）：握手/状态/登录/配置/游戏 | ✅ |
 | zlib 压缩协商 / offline 模式登录 | ✅ |
 | 配置阶段（known packs + 30 个同步 registry + Update Tags） | ✅ |
-| chunk 编码（含 1.21.5+ Fluid count）/ network NBT | ✅ |
-| vanilla 数据层（从 client.jar 生成） | ✅ |
+| chunk 编码（含 1.21.5+ Fluid count）/ paletted container / network NBT | ✅ |
+| vanilla 数据层（从 client.jar + Mojang reports 生成） | ✅ |
 | **进入空世界 + 聊天** | ✅ 真实 MC 26.2 客户端实测 |
+| **方块挖掘（破坏方块 + 多人同步）** | ✅ 真实 MC 26.2 客户端实测 |
 | Docker 交付（21MB 镜像） | ✅ |
 
 ---
@@ -36,15 +37,16 @@ go build -o bin/mock-client  ./cmd/mock-client
 
 ### vanilla 数据（已内置，正常无需操作）
 
-`pkg/server/vanilla_data.go` 和 `pkg/server/vanilla_tags.go` 是从 26.2 `client.jar` 的 `data/` 提取生成的，**已提交到仓库**，所以开箱即可编译运行。
+`pkg/server/vanilla_data.go`、`vanilla_tags.go` 是从 26.2 `client.jar` 的 `data/` 提取生成的；`block_states.go` 是从 26.2 `server.jar --reports` 的 `reports/blocks.json` 生成的（block state id 运行时计算，不在 client.jar）。都**已提交到仓库**，开箱即可编译运行。
 
 **仅当升级到别的 MC 版本时**才需要重新生成：
 
 ```bash
-# 1) 改 scripts/gen_registries.py 和 gen_tags.py 顶部的 JAR 路径指向新版本 client.jar
-# 2) 重新生成
+# 1) 改 scripts/gen_*.py 顶部的 JAR 路径指向新版本（client.jar / server.jar）
+# 2) 重新生成 registry / tags / block states
 python3 scripts/gen_registries.py > pkg/server/vanilla_data.go
 python3 scripts/gen_tags.py       > pkg/server/vanilla_tags.go
+BLOCKS_JSON=/path/to/reports/blocks.json python3 scripts/gen_blocks.py > pkg/server/block_states.go
 # 3) 重新构建
 go build ./...
 ```
@@ -141,13 +143,17 @@ cmd/
 pkg/
   protocol/         协议原语：数据类型 / 包读写 / 压缩 / network NBT / 各阶段包
   net/              连接层：状态机（5 阶段）+ 压缩
-  server/           应用层：状态机 / chunk / registry / tags / handler
+  server/           应用层：状态机 / chunk / world / registry / tags / handler
+    chunk.go          Chunk/ChunkSection + paletted container（单值/间接/直接）+ 位打包
+    world.go          World 稀疏 chunk 存储 + SetBlock/GetBlock + 出生点平台
+    block_states.go   从 Mojang reports 生成的 block state id 映射
     vanilla_data.go   生成的同步 registry 条目（30 个 registry）
     vanilla_tags.go   生成的 tags（15 个 tag registry）
   config/           TOML 配置
 scripts/
   gen_registries.py   从 client.jar 生成 vanilla_data.go
   gen_tags.py         从 client.jar 生成 vanilla_tags.go
+  gen_blocks.py       从 server.jar --reports 生成 block_states.go
   gen_classpath.py    真实客户端启动辅助：生成 classpath
   run_real_client.sh  真实客户端一键启动 + Quick Play 连接
   auto-debug.sh       自动化调试循环（占位）
@@ -182,8 +188,9 @@ go vet ./...      # 静态检查
 - [x] mock 客户端端到端验证
 - [x] vanilla 数据层（从 client.jar 生成）
 - [x] 真实 MC 26.2 客户端进入空世界 + 聊天
+- [x] 方块挖掘 MVP（Player Action → 破坏 → 广播 + Ack）
 - [x] Docker 镜像交付（21MB）
-- [ ] 多玩家交互、方块/实体、世界持久化（未来）
+- [ ] 方块放置（物品栏）、多 chunk 视距、世界持久化（未来）
 
 ## 协议文档来源
 

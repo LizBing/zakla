@@ -7,25 +7,25 @@ import (
 
 // Configuration-phase packet IDs (PVN 776).
 const (
-	CfgIDPluginMessage      int32 = 0x01 // clientbound
-	CfgIDDisconnect         int32 = 0x02 // clientbound
-	CfgIDFinishConfig       int32 = 0x03 // clientbound
-	CfgIDKeepAlive          int32 = 0x04 // both
-	CfgIDPing               int32 = 0x05 // clientbound
-	CfgIDResetChat          int32 = 0x06 // clientbound
-	CfgIDRegistryData       int32 = 0x07 // clientbound
-	CfgIDFeatureFlags       int32 = 0x0C // clientbound
-	CfgIDUpdateTags         int32 = 0x0D // clientbound
-	CfgIDKnownPacksCB       int32 = 0x0E // clientbound
-	CfgIDCustomReport       int32 = 0x0F // clientbound
-	CfgIDServerLinks        int32 = 0x10 // clientbound
+	CfgIDPluginMessage int32 = 0x01 // clientbound
+	CfgIDDisconnect    int32 = 0x02 // clientbound
+	CfgIDFinishConfig  int32 = 0x03 // clientbound
+	CfgIDKeepAlive     int32 = 0x04 // both
+	CfgIDPing          int32 = 0x05 // clientbound
+	CfgIDResetChat     int32 = 0x06 // clientbound
+	CfgIDRegistryData  int32 = 0x07 // clientbound
+	CfgIDFeatureFlags  int32 = 0x0C // clientbound
+	CfgIDUpdateTags    int32 = 0x0D // clientbound
+	CfgIDKnownPacksCB  int32 = 0x0E // clientbound
+	CfgIDCustomReport  int32 = 0x0F // clientbound
+	CfgIDServerLinks   int32 = 0x10 // clientbound
 
-	CfgIDClientInfo         int32 = 0x00 // serverbound
-	CfgIDPluginMessageSB    int32 = 0x02 // serverbound
-	CfgIDAckFinishConfig    int32 = 0x03 // serverbound
-	CfgIDKeepAliveSB        int32 = 0x04 // serverbound
-	CfgIDPong               int32 = 0x05 // serverbound
-	CfgIDKnownPacksSB       int32 = 0x07 // serverbound
+	CfgIDClientInfo      int32 = 0x00 // serverbound
+	CfgIDPluginMessageSB int32 = 0x02 // serverbound
+	CfgIDAckFinishConfig int32 = 0x03 // serverbound
+	CfgIDKeepAliveSB     int32 = 0x04 // serverbound
+	CfgIDPong            int32 = 0x05 // serverbound
+	CfgIDKnownPacksSB    int32 = 0x07 // serverbound
 )
 
 // KnownPack names a data pack whose contents the sender already has.
@@ -153,7 +153,7 @@ func EncodePong(id int32) []byte {
 
 // TagDefinition is one tag and its member IDs within an Update Tags payload.
 type TagDefinition struct {
-	Name    string // tag identifier
+	Name    string  // tag identifier
 	Entries []int32 // registry element IDs (empty = tag exists but has no members)
 }
 

@@ -10,22 +10,22 @@ import (
 
 // Config represents the server configuration.
 type Config struct {
-	Host     string `toml:"host"`
-	Port     int    `toml:"port"`
-	MaxPlayers int   `toml:"max_players"`
-	Motd     string `toml:"motd"`
+	Host       string `toml:"host"`
+	Port       int    `toml:"port"`
+	MaxPlayers int    `toml:"max_players"`
+	Motd       string `toml:"motd"`
 
 	Network struct {
 		CompressionThreshold int `toml:"compression_threshold"`
-		MaxConnections      int `toml:"max_connections"`
+		MaxConnections       int `toml:"max_connections"`
 	} `toml:"network"`
 
 	World struct {
-		Name         string `toml:"name"`
-		Seed         int64  `toml:"seed"`
-		Difficulty   string `toml:"difficulty"`
-		GameMode     string `toml:"gamemode"`
-		Hardcore     bool   `toml:"hardcore"`
+		Name       string `toml:"name"`
+		Seed       int64  `toml:"seed"`
+		Difficulty string `toml:"difficulty"`
+		GameMode   string `toml:"gamemode"`
+		Hardcore   bool   `toml:"hardcore"`
 	} `toml:"world"`
 
 	Logging struct {

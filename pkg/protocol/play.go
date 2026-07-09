@@ -8,32 +8,37 @@ import (
 // Play-phase packet IDs (PVN 776).
 const (
 	// Clientbound
-	PlayIDChangeDifficulty  int32 = 0x0A
-	PlayIDGameEvent         int32 = 0x26
-	PlayIDDisconnect        int32 = 0x20
-	PlayIDKeepAlive         int32 = 0x2C
-	PlayIDChunkDataLight    int32 = 0x2D
-	PlayIDLogin             int32 = 0x31
-	PlayIDPlayerAbilities   int32 = 0x40
-	PlayIDPlayerChat        int32 = 0x41
-	PlayIDPlayerInfoUpdate  int32 = 0x46
-	PlayIDSynchPlayerPos    int32 = 0x48
-	PlayIDSetCenterChunk    int32 = 0x5E
-	PlayIDSetDefaultSpawn   int32 = 0x61
-	PlayIDSetHealth         int32 = 0x68
-	PlayIDSetHeldItem       int32 = 0x69
-	PlayIDUpdateTime        int32 = 0x71
-	PlayIDSystemChat        int32 = 0x79
-	PlayIDPluginMessage     int32 = 0x18
+	PlayIDChangeDifficulty    int32 = 0x0A
+	PlayIDGameEvent           int32 = 0x26
+	PlayIDDisconnect          int32 = 0x20
+	PlayIDKeepAlive           int32 = 0x2C
+	PlayIDChunkDataLight      int32 = 0x2D
+	PlayIDLogin               int32 = 0x31
+	PlayIDPlayerAbilities     int32 = 0x40
+	PlayIDPlayerChat          int32 = 0x41
+	PlayIDPlayerInfoUpdate    int32 = 0x46
+	PlayIDSynchPlayerPos      int32 = 0x48
+	PlayIDSetCenterChunk      int32 = 0x5E
+	PlayIDSetDefaultSpawn     int32 = 0x61
+	PlayIDSetHealth           int32 = 0x68
+	PlayIDSetHeldItem         int32 = 0x69
+	PlayIDUpdateTime          int32 = 0x71
+	PlayIDSystemChat          int32 = 0x79
+	PlayIDPluginMessage       int32 = 0x18
+	PlayIDBlockUpdate         int32 = 0x08
+	PlayIDBlockChangedAck     int32 = 0x04
+	PlayIDSectionBlocksUpdate int32 = 0x54
 
 	// Serverbound
-	PlayIDConfirmTeleport   int32 = 0x00
-	PlayIDChatMessage       int32 = 0x09
-	PlayIDKeepAliveSB       int32 = 0x1C
-	PlayIDPlayerPosRot      int32 = 0x1F
-	PlayIDPlayerLoaded      int32 = 0x2C
-	PlayIDClientTickEnd     int32 = 0x0D
-	PlayIDClientInfoSB      int32 = 0x0E
+	PlayIDConfirmTeleport int32 = 0x00
+	PlayIDChatMessage     int32 = 0x09
+	PlayIDKeepAliveSB     int32 = 0x1C
+	PlayIDPlayerPosRot    int32 = 0x1F
+	PlayIDPlayerLoaded    int32 = 0x2C
+	PlayIDClientTickEnd   int32 = 0x0D
+	PlayIDClientInfoSB    int32 = 0x0E
+	PlayIDPlayerAction    int32 = 0x29
+	PlayIDUseItemOn       int32 = 0x42
 )
 
 // Game events (Game Event packet).
@@ -56,7 +61,7 @@ type LoginPlay struct {
 	DimensionName       string // identifier
 	HashedSeed          int64
 	GameMode            uint8
-	PreviousGameMode   int8
+	PreviousGameMode    int8
 	IsDebug             bool
 	IsFlat              bool
 	PortalCooldown      int32
@@ -235,4 +240,138 @@ func DecodeChatMessage(data []byte) (string, error) {
 		return "", fmt.Errorf("read chat message: %w", err)
 	}
 	return msg, nil
+}
+
+// --- Block interaction packets (PVN 776) ---
+
+// EncodeBlockUpdate builds the Block Update payload (Play 0x08, clientbound):
+// a single absolute block Position and its new state id.
+func EncodeBlockUpdate(pos Position, stateID int32) []byte {
+	var b bytes.Buffer
+	_ = WritePosition(&b, pos)
+	_ = WriteVarInt(&b, stateID)
+	return b.Bytes()
+}
+
+// EncodeBlockChangedAck builds the Block Changed Ack payload (Play 0x04,
+// clientbound). Every serverbound Player Action / Use Item On carrying a
+// sequence must be acked, or the client freezes further block edits.
+func EncodeBlockChangedAck(sequence int32) []byte {
+	var b bytes.Buffer
+	_ = WriteVarInt(&b, sequence)
+	return b.Bytes()
+}
+
+// SectionBlockChange is one entry in an Update Section Blocks payload.
+type SectionBlockChange struct {
+	LocalX, LocalY, LocalZ int // 0..15 within the section
+	StateID                int32
+}
+
+// EncodeSectionBlocksUpdate builds the Update Section Blocks payload (Play 0x54,
+// clientbound): a packed chunk-section position followed by a prefixed array of
+// VarLong entries, each = (stateID << 12) | (localX<<8 | localZ<<4 | localY).
+func EncodeSectionBlocksUpdate(chunkX, sectionY, chunkZ int32, changes []SectionBlockChange) []byte {
+	var b bytes.Buffer
+	_ = WriteInt64(&b, packSectionPos(chunkX, sectionY, chunkZ))
+	_ = WriteVarInt(&b, int32(len(changes)))
+	for _, c := range changes {
+		entry := (int64(c.StateID) << 12) | int64((c.LocalX&0xF)<<8|(c.LocalZ&0xF)<<4|(c.LocalY&0xF))
+		_ = WriteVarLong(&b, entry)
+	}
+	return b.Bytes()
+}
+
+// packSectionPos packs chunk X, section Y, chunk Z into the Long the wiki
+// defines: ((X & 0x3FFFFF) << 42) | (Y & 0xFFFFF) | ((Z & 0x3FFFFF) << 20).
+func packSectionPos(x, y, z int32) int64 {
+	return (int64(x&0x3FFFFF) << 42) | int64(y&0xFFFFF) | (int64(z&0x3FFFFF) << 20)
+}
+
+// Player Action (serverbound) Status enum (PVN 776).
+const (
+	PlayerActionStartedDigging  int32 = 0
+	PlayerActionCancelledDig    int32 = 1
+	PlayerActionFinishedDigging int32 = 2
+	PlayerActionDropItemStack   int32 = 3
+	PlayerActionDropItem        int32 = 4
+	PlayerActionReleaseItem     int32 = 5 // shoot arrow / stop using item
+	PlayerActionSwapHands       int32 = 6
+	PlayerActionStab            int32 = 7 // new in PVN 776
+)
+
+// PlayerAction carries the Player Action payload (Play 0x29, serverbound).
+type PlayerAction struct {
+	Action   int32 // Status enum
+	Position Position
+	Face     int8 // Byte enum: 0=-Y .. 5=+X
+	Sequence int32
+}
+
+// DecodePlayerAction reads the Player Action payload.
+func DecodePlayerAction(data []byte) (PlayerAction, error) {
+	r := bytes.NewReader(data)
+	var a PlayerAction
+	var err error
+	if a.Action, err = ReadVarInt(r); err != nil {
+		return a, err
+	}
+	if a.Position, err = ReadPosition(r); err != nil {
+		return a, err
+	}
+	if a.Face, err = ReadInt8(r); err != nil {
+		return a, err
+	}
+	if a.Sequence, err = ReadVarInt(r); err != nil {
+		return a, err
+	}
+	return a, nil
+}
+
+// UseItemOn carries the Use Item On payload (Play 0x42, serverbound).
+type UseItemOn struct {
+	Hand        int32 // 0=main, 1=off
+	Position    Position
+	Face        int32 // VarInt enum: 0=-Y .. 5=+X
+	CursorX     float32
+	CursorY     float32
+	CursorZ     float32
+	Inside      bool
+	WorldBorder bool
+	Sequence    int32
+}
+
+// DecodeUseItemOn reads the Use Item On payload.
+func DecodeUseItemOn(data []byte) (UseItemOn, error) {
+	r := bytes.NewReader(data)
+	var u UseItemOn
+	var err error
+	if u.Hand, err = ReadVarInt(r); err != nil {
+		return u, err
+	}
+	if u.Position, err = ReadPosition(r); err != nil {
+		return u, err
+	}
+	if u.Face, err = ReadVarInt(r); err != nil {
+		return u, err
+	}
+	if u.CursorX, err = ReadFloat32(r); err != nil {
+		return u, err
+	}
+	if u.CursorY, err = ReadFloat32(r); err != nil {
+		return u, err
+	}
+	if u.CursorZ, err = ReadFloat32(r); err != nil {
+		return u, err
+	}
+	if u.Inside, err = ReadBool(r); err != nil {
+		return u, err
+	}
+	if u.WorldBorder, err = ReadBool(r); err != nil {
+		return u, err
+	}
+	if u.Sequence, err = ReadVarInt(r); err != nil {
+		return u, err
+	}
+	return u, nil
 }

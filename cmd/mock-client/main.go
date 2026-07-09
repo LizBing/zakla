@@ -128,6 +128,16 @@ func main() {
 	} else {
 		logger.Printf("SENT CHAT: %q", msg)
 	}
+
+	// Test block mining: send a Finished-digging action at a known solid block
+	// and expect the server to ack and broadcast a Block Update (air).
+	time.Sleep(500 * time.Millisecond)
+	digPos := protocol.EncodePosition(1, 63, 1)
+	if err := sendPlayerAction(c, protocol.PlayerActionFinishedDigging, digPos, 1, 1); err != nil {
+		logger.Printf("player action send error: %v", err)
+	} else {
+		logger.Printf("SENT PLAYER ACTION (Finished dig at 1,63,1 seq=1)")
+	}
 	time.Sleep(2 * time.Second)
 	logger.Printf("DONE")
 }
@@ -152,6 +162,14 @@ func playReader(c *mcnet.Connection) {
 			logger.Printf("SYSTEM CHAT received (%d bytes)", len(data))
 		case protocol.PlayIDChunkDataLight:
 			logger.Printf("chunk data received (%d bytes)", len(data))
+		case protocol.PlayIDBlockChangedAck:
+			seq, _ := protocol.ReadVarInt(bytes.NewReader(data))
+			logger.Printf("BLOCK CHANGED ACK (seq=%d)", seq)
+		case protocol.PlayIDBlockUpdate:
+			pos, _ := protocol.ReadPosition(bytes.NewReader(data))
+			state, _ := protocol.ReadVarInt(bytes.NewReader(data))
+			x, y, z := pos.Decode()
+			logger.Printf("BLOCK UPDATE at %d,%d,%d state=%d", x, y, z, state)
 		case protocol.PlayIDDisconnect:
 			logger.Printf("play disconnect")
 			return
@@ -165,12 +183,21 @@ func sendChat(c *mcnet.Connection, msg string) error {
 	var b bytes.Buffer
 	_ = protocol.WriteString(&b, msg)
 	_ = protocol.WriteInt64(&b, time.Now().UnixMilli()) // timestamp
-	_ = protocol.WriteInt64(&b, 0)                       // salt
-	_ = protocol.WriteBool(&b, false)                    // no signature
-	_ = protocol.WriteVarInt(&b, 0)                      // message count
-	_, _ = b.Write([]byte{0, 0, 0})                      // acknowledged fixed bitset(20) = 3 bytes
-	_ = protocol.WriteInt8(&b, 0)                        // checksum
+	_ = protocol.WriteInt64(&b, 0)                      // salt
+	_ = protocol.WriteBool(&b, false)                   // no signature
+	_ = protocol.WriteVarInt(&b, 0)                     // message count
+	_, _ = b.Write([]byte{0, 0, 0})                     // acknowledged fixed bitset(20) = 3 bytes
+	_ = protocol.WriteInt8(&b, 0)                       // checksum
 	return c.WritePacket(protocol.PlayIDChatMessage, b.Bytes())
+}
+
+func sendPlayerAction(c *mcnet.Connection, action int32, pos protocol.Position, face int8, seq int32) error {
+	var b bytes.Buffer
+	_ = protocol.WriteVarInt(&b, action)
+	_ = protocol.WritePosition(&b, pos)
+	_ = protocol.WriteInt8(&b, face)
+	_ = protocol.WriteVarInt(&b, seq)
+	return c.WritePacket(protocol.PlayIDPlayerAction, b.Bytes())
 }
 
 func playerUUID() protocol.UUID {
@@ -184,7 +211,7 @@ func envOr(k, d string) string {
 	return d
 }
 
-func fail(format string, args ...interface{}) {
+func fail(format string, args ...any) {
 	logger.Printf(format, args...)
 	os.Exit(2)
 }

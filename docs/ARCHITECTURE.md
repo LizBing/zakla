@@ -17,7 +17,9 @@ pkg/net        连接层
 pkg/server     应用层
   server.go       Server 生命周期 + 玩家管理 + 聊天广播
   handler.go      每连接状态机：handle→Status/Login/Configuration/Play
-  chunk.go        空 chunk 构造（26.2 paletted container + light）
+  chunk.go        Chunk/ChunkSection 数据结构 + paletted container（单值/间接/直接）+ 位打包 + light
+  world.go        World 稀疏 chunk 存储 + SetBlock/GetBlock + 出生点平台
+  block_states.go 从 Mojang reports 生成的 block state id 映射（name→id / id→name）
   registries.go   同步 registry 数据（dimension_type/biome/chat_type/damage_type/world_clock）
   util.go         offline UUID / entity id / teleport id
 ```
@@ -49,6 +51,10 @@ S→C Set Center Chunk
 S→C Chunk Data and Update Light
 S→C Set Health
 C↔S Keep Alive (每 ~10s) / Chat
+── 方块交互（挖掘） ──
+C→S Player Action (Finished digging, position, sequence)
+S→C Block Update (position, air)         ← 广播给所有在线玩家（含挖掘者）
+S→C Block Changed Ack (sequence)         ← 必须回，否则客户端冻结
 ```
 
 ## 26.2 特定点（实现中踩过的坑）
@@ -56,7 +62,13 @@ C↔S Keep Alive (每 ~10s) / Chat
 - **Configuration 阶段**：1.20.2+ 登录成功后必须经过配置阶段（registry data + finish configuration）。很多老教程/老实现没有这步。
 - **Login Success 含 Session ID**：26.2 在 Game Profile 之后多了 Session ID (UUID) 字段。
 - **Chunk Section 含 Fluid count**：1.21.5+ 每个 section = `block count (Short)` + `fluid count (Short)` + block-states paletted container + biomes paletted container。漏掉 fluid count 会让后续全部错位。
-- **Paletted container 单值模式**：`BPE=0x00` 后跟一个**裸 VarInt 值**（无 palette count 前缀，无 data array）。1.21.5+ data array 不再发送长度前缀。
+- **Paletted container 三模式**（block-states：minBits=4，indirect 上限 8，超过升 direct=ceil(log2 TotalBlockStates)=15；biomes：minBits=0，上限 3，direct=ceil(log2 biomeCount)）：
+  - **单值**（唯一值=1）：`BPE=0x00` + 裸 VarInt 值（无 palette，无 data）。
+  - **间接**（≤阈值）：BPE + VarInt palette + data long 数组。
+  - **直接**（>阈值）：BPE=globalBits + data long 数组（无 palette，entries 直接是全局 id）。
+- **Paletted container data long 数组**：`long[ceil(4096×BPE/64)]`，条目**跨 long 边界扁平打包**（entry i 起始 bit = i×BPE，从 long 数值 LSB 起），**无 VarInt 长度前缀**（1.21.5+ 客户端按 BPE 推导 longCount）。这是真实客户端最容易崩的点——本项目用离线往返测试（encode→decode）+ 真实客户端渲染双重验证。
+- **BlockChangedAck 不可省**：每个带 sequence 的 serverbound 方块包（Player Action / Use Item On）都**必须**回 `Block Changed Ack (0x04, sequence)`，否则客户端冻结后续方块编辑。
+- **Player Action 的 Face 是 Byte，Use Item On 的 Face 是 VarInt**（类型不同，易踩坑）。
 - **Heightmaps**：1.21.5+ 是 "Prefixed Array of Heightmap"，空数组（VarInt 0）合法。
 - **Quick Play**：26.2 客户端已**不再识别 `--server`**，自动连接需用 `--quickPlayMultiplayer "host:port"`。
 - **Network NBT**：1.20.2+（协议 764+）的**网络 NBT**，根标签**无 name length 字段**（type 字节后直接跟 payload）。system_chat 的 Text Component、registry entry NBT 都用此格式。写成文件格式 NBT（带 root name length）会让客户端把 name length 当成 payload 长度，解析错位（曾导致 "found 27 bytes extra"）。
@@ -69,6 +81,14 @@ C↔S Keep Alive (每 ~10s) / Chat
 1. `damage_type` 列表里 `player_explosion` 写了两次 → 客户端 `Adding duplicate key` 崩溃
 2. 缺 `world_clock` registry → 客户端 `Unbound values in world_clock` 崩溃
 3. registry / tags 不完整 → 客户端 `FinishConfiguration` 时校验失败（dimension_type 缺 `infiniburn_overworld` tag、timeline 缺 `in_overworld` tag 等）
+
+## 方块交互（挖掘 MVP）
+
+方块交互分两步走：先**挖掘 MVP**（破坏方块），放置（需物品栏 + item→block 映射）留作后续。
+
+- **block state id** 不在 client.jar（运行时计算），用 **Mojang reports**（`server.jar --reports` → `reports/blocks.json`）拿到计算好的数字 id，生成 `block_states.go`。prismarine-data 没有 26.2，1.21.9 的 id 对不上 26.2 新方块（硫/朱砂），不可用。
+- **挖掘流程**：客户端发 Player Action（Status=2 Finished）→ 服务端 `World.SetBlock(air)` → `broadcastBlockUpdate`（广播给所有在线玩家，含挖掘者）→ 回 `Block Changed Ack`。任何 Player Action（含 Started/Cancelled 等非破坏动作）都要回 ack。
+- **验证**：mock 客户端自动验证协议链路（发 Player Action → 收 Block Update(air) + Ack）；真实客户端验证 spawn 平台渲染（间接 paletted container 位打包，曾只验证过全空气的单值模式）。
 
 ## 自动化调试方法
 
@@ -95,12 +115,13 @@ python3 scripts/gen_classpath.py   # 或见仓库内实现
   --quickPlayMultiplayer "localhost:25565"
 ```
 
-## 剩余工作：vanilla 数据层
+## 已完成 & 后续
 
-让真实客户端完全进入世界，需要内置一份 vanilla 数据库：
+vanilla 数据层已落地：从 `26.2.jar` 的 `data/`（client.jar）生成同步 registry + tags（`vanilla_data.go` / `vanilla_tags.go`），block state id 从 Mojang reports 生成（`block_states.go`），都编译进服务端。
 
-1. **完整同步 registry 条目**：`dimension_type, biome, chat_type, damage_type, trim_pattern, trim_material, banner_pattern, wolf_variant, painting_variant, cat_variant, ..., world_clock, sulfur_cube_archetype` 等，含正确 NBT（或靠 known packs 让客户端用内置 core 填充）。
-2. **完整 Update Tags**：`block, item, entity_type, game_event, fluid, biome, ...` 的所有 vanilla tags。
-3. **name→ID 映射**：hardcoded registry（block/item/entity_type 等的数字 ID）——Update Tags 的 tag 条目要用这些 ID。需要从 Mojang reports 或 Burger 生成。
+方块挖掘 MVP 已落地并经真实客户端验证（进入非空世界 + 协议链路）。
 
-实现思路：写一个生成工具，解压 `26.2.jar` 的 `data/`（vanilla data pack），把 registries/tags JSON 转成 Go 数据文件 + ID 映射表，编译进服务端。
+后续：
+- **方块放置**：需物品栏 + item→block 映射 + Use Item On (0x42) 处理。
+- **多 chunk 视距**：当前只发出生点 (0,0)，未来按 view distance 发送。
+- **世界持久化 / 同步优化**：Section Blocks Update 批量、存档读写。

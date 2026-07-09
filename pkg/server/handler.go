@@ -234,7 +234,7 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventStartWaitChunks, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetCenterChunk, protocol.EncodeSetCenterChunk(0, 0))
 
-	if chunkPayload, err := BuildEmptyChunk(0, 0); err == nil {
+	if chunkPayload, err := s.world.GetOrCreateChunk(0, 0).Encode(); err == nil {
 		_ = conn.WritePacket(protocol.PlayIDChunkDataLight, chunkPayload)
 	} else {
 		log.Printf("[%s] chunk unavailable: %v", name, err)
@@ -274,6 +274,20 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 				log.Printf("[chat] <%s> %s", name, msg)
 				s.broadcastChat(fmt.Sprintf("<%s> %s", name, msg))
 			}
+		case protocol.PlayIDPlayerAction:
+			act, aErr := protocol.DecodePlayerAction(data)
+			if aErr != nil {
+				log.Printf("[%s] invalid player action: %v", name, aErr)
+				break
+			}
+			if act.Action == protocol.PlayerActionFinishedDigging {
+				x, y, z := act.Position.Decode()
+				s.world.SetBlock(x, y, z, 0) // replace with air
+				s.broadcastBlockUpdate(act.Position, 0)
+			}
+			// Every Player Action carrying a sequence must be acked, or the
+			// client freezes further block edits.
+			_ = conn.WritePacket(protocol.PlayIDBlockChangedAck, protocol.EncodeBlockChangedAck(act.Sequence))
 		default:
 			// unhandled; ignore
 		}

@@ -7,12 +7,12 @@ import (
 
 // Login-phase packet IDs (PVN 776).
 const (
-	PacketIDLoginStart         int32 = 0x00 // serverbound
-	PacketIDLoginDisconnect    int32 = 0x00 // clientbound
-	PacketIDEncryptionRequest  int32 = 0x01 // clientbound
-	PacketIDLoginSuccess       int32 = 0x02 // clientbound
-	PacketIDSetCompression     int32 = 0x03 // clientbound
-	PacketIDLoginAcknowledged  int32 = 0x03 // serverbound
+	PacketIDLoginStart        int32 = 0x00 // serverbound
+	PacketIDLoginDisconnect   int32 = 0x00 // clientbound
+	PacketIDEncryptionRequest int32 = 0x01 // clientbound
+	PacketIDLoginSuccess      int32 = 0x02 // clientbound
+	PacketIDSetCompression    int32 = 0x03 // clientbound
+	PacketIDLoginAcknowledged int32 = 0x03 // serverbound
 )
 
 // DecodeLoginStart reads the serverbound Login Start payload.
