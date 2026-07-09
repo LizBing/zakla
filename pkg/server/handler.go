@@ -284,6 +284,7 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 				x, y, z := act.Position.Decode()
 				s.world.SetBlock(x, y, z, 0) // replace with air
 				s.broadcastBlockUpdate(act.Position, 0)
+				log.Printf("[%s] mined block (%d,%d,%d) -> air, ack seq=%d", name, x, y, z, act.Sequence)
 			}
 			// Every Player Action carrying a sequence must be acked, or the
 			// client freezes further block edits.
