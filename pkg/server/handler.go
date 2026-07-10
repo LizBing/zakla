@@ -369,7 +369,8 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 				heldSlot = 45 // off-hand
 			}
 			if held := player.inventory[heldSlot].ItemID; held > 0 {
-				if blkName, ok := itemIDToName[held]; ok {
+				if itemName, ok := itemIDToName[held]; ok {
+					blkName := ItemToBlockName(itemName)
 					if blkState := BlockStateID(blkName); blkState != 0 {
 						x, y, z := u.Position.Decode()
 						dx, dy, dz := protocol.FaceOffset(u.Face)
