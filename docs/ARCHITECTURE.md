@@ -143,6 +143,19 @@ python3 scripts/gen_classpath.py   # 或见仓库内实现
 - creative 秒挖发 `PlayerAction(Started, status=0)` 而非 Finished —— 破坏逻辑要同时认两者。
 - 副手放置：`Use Item On` 的 Hand 字段（0=主手→hotbar slot 36+held，1=副手→slot 45）。
 
+## 多 chunk 视距 + 世界生成
+
+### 动态 chunk loading
+- 玩家跨 chunk 时 `updatePlayerChunks`：发 Set Center Chunk (0x5E) + 新进入的 chunk（近优先，ChunkData 0x2D）+ 显式 Unload 离开的 (0x25)。
+- **Unload Chunk (0x25) 字段是 Z 在前、X 在后，都是 Int（不是 VarInt）**——和 Set Center Chunk（VarInt）不同，最易踩的坑。客户端自动卸载是惰性 slot 取模、不可靠，wiki 推荐显式 unload（必须在 chunk 离开视距前发，已出视距的 unload 被客户端忽略）。
+- Player 跟踪 `lastChunkX/Z` + `sentChunks`；`PlayerPosRot` 跨 chunk 触发更新。view distance 4（9×9，loaded 稳定 81）。
+
+### 平坦世界生成
+- `GetOrCreateChunk` 新 chunk 自动 `fillFloor`（草 Y=63 + 石 Y=59-62），玩家走到哪都有地面。之前只有 spawn 一块 platform，走远就是虚空掉落。
+
+### 放置碰撞检查
+- `playerOccupies`：放置目标格若是玩家脚/头所在格，拒绝放置（不卡自己，和 vanilla 一致）。
+
 ## 已完成 & 后续
 
 vanilla 数据层已落地：从 `26.2.jar` 的 `data/`（client.jar）生成同步 registry + tags（`vanilla_data.go` / `vanilla_tags.go`），block state id / item id 从 Mojang reports 生成（`block_states.go` / `items.go`），都编译进服务端。
