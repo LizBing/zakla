@@ -131,6 +131,18 @@ python3 scripts/gen_classpath.py   # 或见仓库内实现
 - 启动 `LoadWorld`（文件不存在则新世界 + 预填 spawn）；30s ticker 定期保存；`Stop` 关闭保存——崩溃最多丢最后 30s 编辑。
 - 持久化往返测试（`t.TempDir`，portable）。真实环境验证：挖/放后重启服务端，加载 81 chunks，挖掉的方块保持 air、未动的保持原样。
 
+## 玩家数据持久化
+
+每个玩家一份存档 `<world>/players/<uuid>.gob`（gob，原子写）：
+- `playerData{ Inventory[46], HeldSlot, X/Y/Z, Yaw/Pitch }`。
+- 进游戏 `LoadPlayerData`（无则发 starter 9 方块 + spawn 位置）；`PlayerPosRot(0x1F, C→S)` 跟踪位置；玩家断开时保存。
+- `Set Creative Mode Slot(0x38, C→S)` 跟踪玩家从 creative 菜单拖进 hotbar/背包/副手的物品——重连后全背包保持。
+
+### Creative 模式（坑）
+- 只有 `LoginPlay.GameMode=1` **不够**：还要发 **abilities flags=0x0D**（无敌 | 可飞 | 秒挖）+ **Game Event(Event=3 ChangeGameMode, value=1.0)** 强制切 creative。否则客户端按生存模式（不能飞、挖方块要时间、无 creative 菜单）。
+- creative 秒挖发 `PlayerAction(Started, status=0)` 而非 Finished —— 破坏逻辑要同时认两者。
+- 副手放置：`Use Item On` 的 Hand 字段（0=主手→hotbar slot 36+held，1=副手→slot 45）。
+
 ## 已完成 & 后续
 
 vanilla 数据层已落地：从 `26.2.jar` 的 `data/`（client.jar）生成同步 registry + tags（`vanilla_data.go` / `vanilla_tags.go`），block state id / item id 从 Mojang reports 生成（`block_states.go` / `items.go`），都编译进服务端。
