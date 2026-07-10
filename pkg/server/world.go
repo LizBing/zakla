@@ -232,9 +232,13 @@ const (
 
 // gravityBlockNames lists blocks affected by gravity (MVP: the common ones).
 var gravityBlockNames = map[string]bool{
-	"minecraft:sand":     true,
-	"minecraft:red_sand": true,
-	"minecraft:gravel":   true,
+	"minecraft:sand":          true,
+	"minecraft:red_sand":      true,
+	"minecraft:gravel":        true,
+	"minecraft:anvil":         true,
+	"minecraft:chipped_anvil": true,
+	"minecraft:damaged_anvil": true,
+	"minecraft:dragon_egg":    true,
 }
 
 func isGravityBlock(stateID int32) bool {
@@ -242,9 +246,11 @@ func isGravityBlock(stateID int32) bool {
 	return ok && gravityBlockNames[name]
 }
 
-// isReplaceable reports whether a falling block can move into a cell (MVP: air).
+// isReplaceable reports whether a falling block can move into a cell. Gravity
+// blocks sink through air AND fluids (water/lava are non-solid); they stop on
+// any solid block.
 func isReplaceable(stateID int32) bool {
-	return stateID == 0
+	return stateID == 0 || isFluid(stateID)
 }
 
 // scheduleGravityLocked schedules a fall tick for a gravity block at (x,y,z)
@@ -299,16 +305,21 @@ func (w *World) applyGravityLocked(t scheduledTick) []BlockChange {
 	if !isGravityBlock(state) {
 		return nil
 	}
-	if t.y <= minWorldY || !isReplaceable(w.getBlockLocked(t.x, t.y-1, t.z)) {
+	if t.y <= minWorldY {
 		return nil
 	}
-	// Snap down one cell (no falling_block entity — the client accepts this;
-	// pre-Infdev vanilla itself fell this way, and the protocol has no rule
-	// requiring a falling entity).
-	w.setBlockLocked(t.x, t.y, t.z, 0)
+	below := w.getBlockLocked(t.x, t.y-1, t.z)
+	if !isReplaceable(below) {
+		return nil
+	}
+	// Snap down one cell (no falling_block entity — the client accepts this).
+	// SWAP with the cell below rather than clearing it to air: when sinking
+	// through water/lava the fluid bubbles back up on top instead of being
+	// deleted, so the fluid column survives and the block keeps falling.
+	w.setBlockLocked(t.x, t.y, t.z, below)
 	w.setBlockLocked(t.x, t.y-1, t.z, state)
 	return []BlockChange{
-		{t.x, t.y, t.z, 0},
+		{t.x, t.y, t.z, below},
 		{t.x, t.y - 1, t.z, state},
 	}
 }

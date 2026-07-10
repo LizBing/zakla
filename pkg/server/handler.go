@@ -356,8 +356,18 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			// on "Finished". We're creative, so treat both as a destroy.
 			if act.Action == protocol.PlayerActionFinishedDigging || act.Action == protocol.PlayerActionStartedDigging {
 				x, y, z := act.Position.Decode()
+				brokenName, _ := blockStateName[s.world.GetBlock(x, y, z)]
 				s.world.SetBlock(x, y, z, 0) // replace with air
 				s.broadcastBlockUpdate(act.Position, 0)
+				// Multi-block structures (doors, beds): also clear the other
+				// half so breaking either part removes the whole thing.
+				for _, off := range multiBlockBreakOffsets(brokenName) {
+					px, py, pz := x+off[0], y+off[1], z+off[2]
+					if pn, ok := blockStateName[s.world.GetBlock(px, py, pz)]; ok && pn == brokenName {
+						s.world.SetBlock(px, py, pz, 0)
+						s.broadcastBlockUpdate(protocol.EncodePosition(px, py, pz), 0)
+					}
+				}
 				log.Printf("[%s] mined block (%d,%d,%d) -> air, ack seq=%d", name, x, y, z, act.Sequence)
 			}
 			// Every Player Action carrying a sequence must be acked, or the
@@ -380,19 +390,47 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			if held := player.inventory[heldSlot].ItemID; held > 0 {
 				if itemName, ok := itemIDToName[held]; ok {
 					blkName := ItemToBlockName(itemName)
-					if blkState := BlockStateID(blkName); blkState != 0 {
+					// resolvePlacements yields one or more blocks (doors are
+					// 2-tall) with facing/half/type chosen from the clicked face
+					// + player yaw. Empty = not placeable here (torch on a
+					// ceiling) → skip but still ack below.
+					placements := resolvePlacements(blkName, u.Face, player.yaw, u.CursorY)
+					if len(placements) > 0 {
 						x, y, z := u.Position.Decode()
+						canPlace := true
+						// Attachable blocks (buttons, redstone dust, torches, rails,
+						// …) must attach to a SOLID block — the one that was
+						// clicked. This stops them floating on each other (dust on
+						// dust, button on button).
+						if needsSolidSupport(blkName) && !isSolidBlock(s.world.GetBlock(x, y, z)) {
+							canPlace = false
+						}
 						dx, dy, dz := protocol.FaceOffset(u.Face)
-						nx, ny, nz := x+dx, y+dy, z+dz
-						// Only into an empty cell, and not into the player's
-						// own body (foot + head) — vanilla rejects placement
-						// that would intersect the placer's collision box.
-						cur := s.world.GetBlock(nx, ny, nz)
-						// Place into air or fluid (water/lava are replaceable).
-						if (cur == 0 || isFluid(cur)) && !playerOccupies(player, nx, ny, nz) {
-							s.world.SetBlock(nx, ny, nz, blkState)
-							s.broadcastBlockUpdate(protocol.EncodePosition(nx, ny, nz), blkState)
-							log.Printf("[%s] placed %s at (%d,%d,%d)", name, blkName, nx, ny, nz)
+						bx, by, bz := x+dx, y+dy, z+dz
+						// Every target cell must be air/fluid and not intersect
+						// the player; otherwise reject the whole placement.
+						for _, p := range placements {
+							cx, cy, cz := bx+p.dx, by+p.dy, bz+p.dz
+							cur := s.world.GetBlock(cx, cy, cz)
+							if (cur != 0 && !isFluid(cur)) || playerOccupies(player, cx, cy, cz) {
+								canPlace = false
+								break
+							}
+						}
+						if canPlace {
+							for _, p := range placements {
+								blkState := ResolveStateID(p.name, p.props)
+								if blkState == 0 {
+									blkState = BlockStateID(p.name) // fallback to default
+								}
+								if blkState == 0 {
+									continue
+								}
+								cx, cy, cz := bx+p.dx, by+p.dy, bz+p.dz
+								s.world.SetBlock(cx, cy, cz, blkState)
+								s.broadcastBlockUpdate(protocol.EncodePosition(cx, cy, cz), blkState)
+								log.Printf("[%s] placed %s at (%d,%d,%d)", name, p.name, cx, cy, cz)
+							}
 						}
 					}
 				}
