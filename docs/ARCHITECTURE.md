@@ -73,6 +73,7 @@ S→C Block Changed Ack (sequence)         ← 必须回，否则客户端冻结
 - **Quick Play**：26.2 客户端已**不再识别 `--server`**，自动连接需用 `--quickPlayMultiplayer "host:port"`。
 - **Network NBT**：1.20.2+（协议 764+）的**网络 NBT**，根标签**无 name length 字段**（type 字节后直接跟 payload）。system_chat 的 Text Component、registry entry NBT 都用此格式。写成文件格式 NBT（带 root name length）会让客户端把 name length 当成 payload 长度，解析错位（曾导致 "found 27 bytes extra"）。
 - **world_clock registry**：26.2 新增的同步 registry，维度会引用它，必须发送。
+- **客户端不渲染孤立 chunk**：wiki 明文——Notchian 客户端**一般不渲染没有邻居的 chunk**（为了正确处理光照和连接方块），但 block state 照常读入（所以碰撞/挖掘仍命中）。只发一个 (0,0) 会导致方块"透明有碰撞、只有黑色线框"。必须发 spawn 周围一圈 chunk（哪怕全是空气）当邻居。这是真实客户端才暴露的问题——mock 客户端不校验渲染，发现不了。
 
 ## 真实客户端验证发现的真实 bug
 
