@@ -17,12 +17,14 @@ import (
 
 // Player is a connected, authenticated player.
 type Player struct {
-	conn     *mcnet.Connection
-	Name     string
-	UUID     protocol.UUID
-	EntityID int32
-	heldSlot int32    // selected hotbar slot 0-8
-	hotbar   [9]int32 // item ids in the 9 hotbar slots (inventory slots 36-44); 0 = empty
+	conn       *mcnet.Connection
+	Name       string
+	UUID       protocol.UUID
+	EntityID   int32
+	heldSlot   int32                 // selected hotbar slot 0-8 (maps to inventory slot 36+heldSlot)
+	inventory  [46]protocol.SlotData // full player inventory; 36-44 = hotbar
+	x, y, z    float64               // last known position
+	yaw, pitch float32
 }
 
 // Server is the Minecraft server.

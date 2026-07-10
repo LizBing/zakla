@@ -223,14 +223,44 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		SeaLevel:            63,
 	}
 	_ = conn.WritePacket(protocol.PlayIDLogin, protocol.EncodeLoginPlay(lp))
+	// Login sets GameMode=1; follow up with an explicit "Change game mode" Game
+	// Event to force the client into creative (inventory UI, flight, instant
+	// break). value=1.0 = creative.
+	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventChangeGameMode, 1.0))
 	_ = conn.WritePacket(protocol.PlayIDChangeDifficulty, protocol.EncodeChangeDifficulty(1, false))
-	_ = conn.WritePacket(protocol.PlayIDPlayerAbilities, protocol.EncodePlayerAbilities(0, 0.05, 0.1))
+	// Creative abilities: invulnerable | allow flying | creative (instant break).
+	_ = conn.WritePacket(protocol.PlayIDPlayerAbilities, protocol.EncodePlayerAbilities(0x0D, 0.05, 0.1))
 	_ = conn.WritePacket(protocol.PlayIDSetHeldItem, protocol.EncodeSetHeldItem(0))
 	_ = conn.WritePacket(protocol.PlayIDPlayerInfoUpdate, protocol.EncodePlayerInfoUpdateAdd(uuid, name, 1, true, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetDefaultSpawn, protocol.EncodeSetDefaultSpawn("minecraft:overworld", protocol.EncodePosition(0, 64, 0), 0, 0))
 
+	// Load persisted player data (hotbar + last position); fall back to a
+	// starter inventory and spawn position for brand-new players.
+	player := &Player{conn: conn, Name: name, UUID: uuid, EntityID: entityID, x: 0.5, y: 64, z: 0.5}
+	pdat, pErr := LoadPlayerData(s.cfg.World.Name, uuid)
+	if pErr != nil {
+		log.Printf("[%s] load player data: %v", name, pErr)
+	}
+	if pdat != nil {
+		player.heldSlot = pdat.HeldSlot
+		player.x, player.y, player.z = pdat.X, pdat.Y, pdat.Z
+		player.yaw, player.pitch = pdat.Yaw, pdat.Pitch
+		for i, slot := range pdat.Inventory {
+			player.inventory[i] = protocol.SlotData{ItemID: slot.ItemID, Count: slot.Count}
+		}
+	} else {
+		starter := []string{
+			"minecraft:stone", "minecraft:grass_block", "minecraft:dirt",
+			"minecraft:cobblestone", "minecraft:oak_planks", "minecraft:glass",
+			"minecraft:oak_log", "minecraft:sand", "minecraft:gravel",
+		}
+		for i, blk := range starter {
+			player.inventory[36+i] = protocol.SlotData{ItemID: ItemID(blk), Count: 64}
+		}
+	}
+
 	teleportID := NextTeleportID()
-	_ = conn.WritePacket(protocol.PlayIDSynchPlayerPos, protocol.EncodeSynchronizePlayerPos(teleportID, 0.5, 64, 0.5, 0, 0, 0, 0, 0, 0))
+	_ = conn.WritePacket(protocol.PlayIDSynchPlayerPos, protocol.EncodeSynchronizePlayerPos(teleportID, player.x, player.y, player.z, 0, 0, 0, player.yaw, player.pitch, 0))
 	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventStartWaitChunks, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetCenterChunk, protocol.EncodeSetCenterChunk(0, 0))
 
@@ -251,23 +281,11 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	}
 	_ = conn.WritePacket(protocol.PlayIDSetHealth, protocol.EncodeSetHealth(20, 20, 5))
 
-	// Inventory: fill the hotbar (inventory slots 36-44) with a starter set of
-	// placeable blocks, and mirror the ids into player.hotbar so the server
-	// knows what the player is holding.
-	player := &Player{conn: conn, Name: name, UUID: uuid, EntityID: entityID}
-	starter := []string{
-		"minecraft:stone", "minecraft:grass_block", "minecraft:dirt",
-		"minecraft:cobblestone", "minecraft:oak_planks", "minecraft:glass",
-		"minecraft:oak_log", "minecraft:sand", "minecraft:gravel",
-	}
+	// Inventory: send the player's full inventory (hotbar slots are 36-44).
 	slots := make([]protocol.SlotData, 46)
-	for i, blk := range starter {
-		id := ItemID(blk)
-		player.hotbar[i] = id
-		slots[36+i] = protocol.SlotData{ItemID: id, Count: 64}
-	}
+	copy(slots[:], player.inventory[:])
 	_ = conn.WritePacket(protocol.PlayIDSetContainerContent, protocol.EncodeSetContainerContent(0, 0, slots, protocol.EmptySlot))
-	_ = conn.WritePacket(protocol.PlayIDSetHeldItem, protocol.EncodeSetHeldItem(0))
+	_ = conn.WritePacket(protocol.PlayIDSetHeldItem, protocol.EncodeSetHeldItem(player.heldSlot))
 
 	s.addPlayer(player)
 	s.broadcastChat(fmt.Sprintf("§e%s joined the game", name))
@@ -279,6 +297,21 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		cancel()
 		s.removePlayer(uuid)
 		s.broadcastChat(fmt.Sprintf("§e%s left the game", name))
+		// Persist this player's inventory + position.
+		dat := &playerData{
+			HeldSlot: player.heldSlot,
+			X:        player.x,
+			Y:        player.y,
+			Z:        player.z,
+			Yaw:      player.yaw,
+			Pitch:    player.pitch,
+		}
+		for i, slot := range player.inventory {
+			dat.Inventory[i] = invSlot{ItemID: slot.ItemID, Count: slot.Count}
+		}
+		if err := SavePlayerData(s.cfg.World.Name, uuid, dat); err != nil {
+			log.Printf("[%s] save player data: %v", name, err)
+		}
 	}()
 
 	for {
@@ -294,8 +327,13 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		}
 		switch id {
 		case protocol.PlayIDConfirmTeleport, protocol.PlayIDKeepAliveSB, protocol.PlayIDPlayerLoaded,
-			protocol.PlayIDClientTickEnd, protocol.PlayIDClientInfoSB, protocol.PlayIDPlayerPosRot:
+			protocol.PlayIDClientTickEnd, protocol.PlayIDClientInfoSB:
 			// accepted/ignored in MVP
+		case protocol.PlayIDPlayerPosRot:
+			if m, mErr := protocol.DecodeMovePlayerPosRot(data); mErr == nil {
+				player.x, player.y, player.z = m.X, m.Y, m.Z
+				player.yaw, player.pitch = m.Yaw, m.Pitch
+			}
 		case protocol.PlayIDChatMessage:
 			if msg, mErr := protocol.DecodeChatMessage(data); mErr == nil && len(msg) > 0 {
 				log.Printf("[chat] <%s> %s", name, msg)
@@ -307,7 +345,9 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 				log.Printf("[%s] invalid player action: %v", name, aErr)
 				break
 			}
-			if act.Action == protocol.PlayerActionFinishedDigging {
+			// Creative mode breaks instantly on "Started digging"; survival breaks
+			// on "Finished". We're creative, so treat both as a destroy.
+			if act.Action == protocol.PlayerActionFinishedDigging || act.Action == protocol.PlayerActionStartedDigging {
 				x, y, z := act.Position.Decode()
 				s.world.SetBlock(x, y, z, 0) // replace with air
 				s.broadcastBlockUpdate(act.Position, 0)
@@ -323,9 +363,14 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 				break
 			}
 			// Place the held block (if any) at clicked-location + face offset,
-			// but only into an empty cell. The ack must be sent regardless or
-			// the client reverts the placement (ghost block).
-			if held := player.hotbar[int(player.heldSlot)]; held > 0 {
+			// but only into an empty cell. Hand 0 = main hand (inventory slot
+			// 36+heldSlot), 1 = off-hand (slot 45). The ack must be sent
+			// regardless or the client reverts the placement (ghost block).
+			heldSlot := 36 + int(player.heldSlot) // main hand
+			if u.Hand == 1 {
+				heldSlot = 45 // off-hand
+			}
+			if held := player.inventory[heldSlot].ItemID; held > 0 {
 				if blkName, ok := itemIDToName[held]; ok {
 					if blkState := BlockStateID(blkName); blkState != 0 {
 						x, y, z := u.Position.Decode()
@@ -343,6 +388,14 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		case protocol.PlayIDSetCarriedItemSB:
 			if slot, sErr := protocol.DecodeSetCarriedItem(data); sErr == nil && slot >= 0 && slot < 9 {
 				player.heldSlot = slot
+			}
+		case protocol.PlayIDSetCreativeSlot:
+			// Creative player placed an item into a slot (hotbar or main
+			// inventory). Track it so the player's chosen inventory persists.
+			if cs, csErr := protocol.DecodeSetCreativeModeSlot(data); csErr == nil {
+				if cs.Slot >= 0 && cs.Slot < 46 {
+					player.inventory[cs.Slot] = cs.Item
+				}
 			}
 		default:
 			// unhandled; ignore

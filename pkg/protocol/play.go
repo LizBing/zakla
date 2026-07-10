@@ -41,11 +41,13 @@ const (
 	PlayIDPlayerAction     int32 = 0x29
 	PlayIDUseItemOn        int32 = 0x42
 	PlayIDSetCarriedItemSB int32 = 0x35
+	PlayIDSetCreativeSlot  int32 = 0x38
 )
 
 // Game events (Game Event packet).
 const (
 	GameEventStartWaitChunks uint8 = 13
+	GameEventChangeGameMode  uint8 = 3 // value: 0=survival 1=creative 2=adventure 3=spectator
 )
 
 // LoginPlay carries the fields of the clientbound Login (play) packet (0x31).
@@ -446,4 +448,90 @@ func FaceOffset(face int32) (dx, dy, dz int) {
 		return 1, 0, 0
 	}
 	return 0, 0, 0
+}
+
+// MovePlayerPosRot carries the Set Player Position and Rotation payload
+// (Play 0x1F, C→S). 26.2 replaced the trailing On Ground boolean with a Flags
+// byte (bit0 = on ground, bit1 = pushing against wall).
+type MovePlayerPosRot struct {
+	X, Y, Z    float64
+	Yaw, Pitch float32
+	Flags      uint8
+}
+
+// DecodeMovePlayerPosRot reads the Set Player Position and Rotation payload.
+func DecodeMovePlayerPosRot(data []byte) (MovePlayerPosRot, error) {
+	r := bytes.NewReader(data)
+	var m MovePlayerPosRot
+	var err error
+	if m.X, err = ReadFloat64(r); err != nil {
+		return m, err
+	}
+	if m.Y, err = ReadFloat64(r); err != nil {
+		return m, err
+	}
+	if m.Z, err = ReadFloat64(r); err != nil {
+		return m, err
+	}
+	if m.Yaw, err = ReadFloat32(r); err != nil {
+		return m, err
+	}
+	if m.Pitch, err = ReadFloat32(r); err != nil {
+		return m, err
+	}
+	if m.Flags, err = ReadUint8(r); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+// DecodeSlot reads a 26.2 (1.20.5+) item stack (the inverse of EncodeSlot).
+// Plain block items (no data components) decode fully; items carrying data
+// components (enchantments, custom names, ...) return an error since MVP does
+// not parse per-type component payloads — the caller drops that packet.
+func DecodeSlot(r *bytes.Reader) (SlotData, error) {
+	count, err := ReadVarInt(r)
+	if err != nil {
+		return EmptySlot, err
+	}
+	if count <= 0 {
+		return EmptySlot, nil
+	}
+	id, err := ReadVarInt(r)
+	if err != nil {
+		return SlotData{}, err
+	}
+	addN, err := ReadVarInt(r)
+	if err != nil {
+		return SlotData{}, err
+	}
+	remN, err := ReadVarInt(r)
+	if err != nil {
+		return SlotData{}, err
+	}
+	if addN > 0 || remN > 0 {
+		return SlotData{}, fmt.Errorf("slot has data components (unsupported in MVP)")
+	}
+	return SlotData{ItemID: id, Count: count}, nil
+}
+
+// SetCreativeModeSlot carries the Set Creative Mode Slot payload (Play 0x38,
+// C→S): a creative player placed an item into inventory slot (or -1 = drop).
+type SetCreativeModeSlot struct {
+	Slot int16
+	Item SlotData
+}
+
+// DecodeSetCreativeModeSlot reads the Set Creative Mode Slot payload.
+func DecodeSetCreativeModeSlot(data []byte) (SetCreativeModeSlot, error) {
+	r := bytes.NewReader(data)
+	var s SetCreativeModeSlot
+	var err error
+	if s.Slot, err = ReadInt16(r); err != nil {
+		return s, err
+	}
+	if s.Item, err = DecodeSlot(r); err != nil {
+		return s, err
+	}
+	return s, nil
 }
