@@ -234,10 +234,20 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventStartWaitChunks, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetCenterChunk, protocol.EncodeSetCenterChunk(0, 0))
 
-	if chunkPayload, err := s.world.GetOrCreateChunk(0, 0).Encode(); err == nil {
-		_ = conn.WritePacket(protocol.PlayIDChunkDataLight, chunkPayload)
-	} else {
-		log.Printf("[%s] chunk unavailable: %v", name, err)
+	// The vanilla client does NOT render a chunk that has no neighbors (wiki:
+	// Chunk format — "client generally does not render chunks that lack
+	// neighbors, although you can still interact with them"). So we send a
+	// square of chunks around spawn; only (0,0) holds the platform, the rest
+	// are empty air columns that exist purely so (0,0) gets rendered.
+	const spawnRadius = 4
+	for cz := -spawnRadius; cz <= spawnRadius; cz++ {
+		for cx := -spawnRadius; cx <= spawnRadius; cx++ {
+			if payload, err := s.world.GetOrCreateChunk(int32(cx), int32(cz)).Encode(); err == nil {
+				_ = conn.WritePacket(protocol.PlayIDChunkDataLight, payload)
+			} else {
+				log.Printf("[%s] chunk (%d,%d) unavailable: %v", name, cx, cz, err)
+			}
+		}
 	}
 	_ = conn.WritePacket(protocol.PlayIDSetHealth, protocol.EncodeSetHealth(20, 20, 5))
 
