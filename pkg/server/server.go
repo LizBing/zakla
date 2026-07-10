@@ -25,6 +25,9 @@ type Player struct {
 	inventory  [46]protocol.SlotData // full player inventory; 36-44 = hotbar
 	x, y, z    float64               // last known position
 	yaw, pitch float32
+
+	lastChunkX, lastChunkZ int32             // last chunk the player was known to be in
+	sentChunks             map[chunkKey]bool // chunks the client currently has loaded
 }
 
 // Server is the Minecraft server.
@@ -51,7 +54,7 @@ func New(cfg *config.Config) *Server {
 		log.Fatalf("load world %q: %v", cfg.World.Name, err)
 	}
 	if world.ChunkCount() == 0 {
-		world.fillSpawnPlatform() // first run: seed spawn platform
+		// Terrain is generated on demand per chunk (GetOrCreateChunk → fillFloor).
 		if err := world.Save(); err != nil {
 			log.Printf("initial world save: %v", err)
 		}

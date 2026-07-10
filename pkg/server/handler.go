@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
+	"sort"
 	"time"
 
 	mcnet "github.com/zakla/mc-server/pkg/net"
@@ -211,8 +213,8 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		EntityID:            entityID,
 		DimensionNames:      []string{"minecraft:overworld"},
 		MaxPlayers:          int32(s.cfg.MaxPlayers),
-		ViewDistance:        8,
-		SimulationDistance:  8,
+		ViewDistance:        playerViewDistance,
+		SimulationDistance:  playerViewDistance,
 		EnableRespawnScreen: true,
 		DimensionType:       0,
 		DimensionName:       "minecraft:overworld",
@@ -264,21 +266,12 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventStartWaitChunks, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetCenterChunk, protocol.EncodeSetCenterChunk(0, 0))
 
-	// The vanilla client does NOT render a chunk that has no neighbors (wiki:
-	// Chunk format — "client generally does not render chunks that lack
-	// neighbors, although you can still interact with them"). So we send a
-	// square of chunks around spawn; only (0,0) holds the platform, the rest
-	// are empty air columns that exist purely so (0,0) gets rendered.
-	const spawnRadius = 4
-	for cz := -spawnRadius; cz <= spawnRadius; cz++ {
-		for cx := -spawnRadius; cx <= spawnRadius; cx++ {
-			if payload, err := s.world.GetOrCreateChunk(int32(cx), int32(cz)).Encode(); err == nil {
-				_ = conn.WritePacket(protocol.PlayIDChunkDataLight, payload)
-			} else {
-				log.Printf("[%s] chunk (%d,%d) unavailable: %v", name, cx, cz, err)
-			}
-		}
-	}
+	// Stream initial chunks around the player (and track them for later
+	// dynamic load/unload as the player moves). Sending neighbors is also
+	// required because the vanilla client won't render a chunk with no
+	// neighbors (wiki: Chunk format).
+	player.sentChunks = map[chunkKey]bool{}
+	s.updatePlayerChunks(conn, player)
 	_ = conn.WritePacket(protocol.PlayIDSetHealth, protocol.EncodeSetHealth(20, 20, 5))
 
 	// Inventory: send the player's full inventory (hotbar slots are 36-44).
@@ -333,6 +326,11 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			if m, mErr := protocol.DecodeMovePlayerPosRot(data); mErr == nil {
 				player.x, player.y, player.z = m.X, m.Y, m.Z
 				player.yaw, player.pitch = m.Yaw, m.Pitch
+				// When the player crosses into a new chunk, refresh loaded
+				// chunks (stream in new ones, unload far ones).
+				if int32(math.Floor(m.X/16)) != player.lastChunkX || int32(math.Floor(m.Z/16)) != player.lastChunkZ {
+					s.updatePlayerChunks(conn, player)
+				}
 			}
 		case protocol.PlayIDChatMessage:
 			if msg, mErr := protocol.DecodeChatMessage(data); mErr == nil && len(msg) > 0 {
@@ -376,7 +374,10 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 						x, y, z := u.Position.Decode()
 						dx, dy, dz := protocol.FaceOffset(u.Face)
 						nx, ny, nz := x+dx, y+dy, z+dz
-						if s.world.GetBlock(nx, ny, nz) == 0 {
+						// Only into an empty cell, and not into the player's
+						// own body (foot + head) — vanilla rejects placement
+						// that would intersect the placer's collision box.
+						if s.world.GetBlock(nx, ny, nz) == 0 && !playerOccupies(player, nx, ny, nz) {
 							s.world.SetBlock(nx, ny, nz, blkState)
 							s.broadcastBlockUpdate(protocol.EncodePosition(nx, ny, nz), blkState)
 							log.Printf("[%s] placed %s at (%d,%d,%d)", name, blkName, nx, ny, nz)
@@ -401,6 +402,78 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			// unhandled; ignore
 		}
 	}
+}
+
+// playerViewDistance is the Chebyshev radius of chunks sent around the player.
+const playerViewDistance = 4
+
+func abs32(x int32) int32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// playerOccupies reports whether block (x,y,z) intersects the player's body
+// (the foot cell plus the head cell above it). Used to stop a player placing a
+// block into themselves.
+func playerOccupies(p *Player, x, y, z int) bool {
+	fx, fy, fz := int(math.Floor(p.x)), int(math.Floor(p.y)), int(math.Floor(p.z))
+	return fx == x && fz == z && (fy == y || fy+1 == y)
+}
+
+// updatePlayerChunks keeps the client's loaded chunks in sync with the player's
+// position: sends Set Center Chunk, streams in newly-entered chunks (nearest
+// first), and explicitly unloads chunks that left the view distance. The
+// client's auto-unload is unreliable (lazy slot modulo), so we must unload
+// explicitly while the chunk is still technically in range (wiki: Set Center
+// Chunk — "servers should always explicitly unload any loaded chunks before
+// they go outside the loading area").
+func (s *Server) updatePlayerChunks(conn *mcnet.Connection, player *Player) {
+	cx := int32(math.Floor(player.x / 16))
+	cz := int32(math.Floor(player.z / 16))
+	player.lastChunkX, player.lastChunkZ = cx, cz
+
+	_ = conn.WritePacket(protocol.PlayIDSetCenterChunk, protocol.EncodeSetCenterChunk(cx, cz))
+
+	want := make(map[chunkKey]bool, (2*playerViewDistance+1)*(2*playerViewDistance+1))
+	for dz := int32(-playerViewDistance); dz <= playerViewDistance; dz++ {
+		for dx := int32(-playerViewDistance); dx <= playerViewDistance; dx++ {
+			want[chunkKey{cx + dx, cz + dz}] = true
+		}
+	}
+	// Send newly-entered chunks, nearest first.
+	type pending struct {
+		k chunkKey
+		d int32
+	}
+	var entering []pending
+	for k := range want {
+		if !player.sentChunks[k] {
+			entering = append(entering, pending{k, max(abs32(k.x-cx), abs32(k.z-cz))})
+		}
+	}
+	sort.Slice(entering, func(i, j int) bool { return entering[i].d < entering[j].d })
+	sentN := 0
+	for _, e := range entering {
+		if payload, err := s.world.GetOrCreateChunk(e.k.x, e.k.z).Encode(); err == nil {
+			_ = conn.WritePacket(protocol.PlayIDChunkDataLight, payload)
+			player.sentChunks[e.k] = true
+			sentN++
+		} else {
+			log.Printf("[%s] chunk (%d,%d) unavailable: %v", player.Name, e.k.x, e.k.z, err)
+		}
+	}
+	// Unload chunks that left the view distance.
+	unloadedN := 0
+	for k := range player.sentChunks {
+		if !want[k] {
+			_ = conn.WritePacket(protocol.PlayIDUnloadChunk, protocol.EncodeUnloadChunk(k.x, k.z))
+			delete(player.sentChunks, k)
+			unloadedN++
+		}
+	}
+	log.Printf("[%s] chunks: center (%d,%d) sent=%d unloaded=%d loaded=%d", player.Name, cx, cz, sentN, unloadedN, len(player.sentChunks))
 }
 
 func (s *Server) keepAliveLoop(ctx context.Context, conn *mcnet.Connection) {

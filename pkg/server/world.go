@@ -141,9 +141,25 @@ func (w *World) GetOrCreateChunk(cx, cz int32) *Chunk {
 	c := w.chunks[key]
 	if c == nil {
 		c = NewChunk(cx, cz)
+		fillFloor(c) // worldgen MVP: flat grass-on-stone so there's always ground
 		w.chunks[key] = c
+		w.dirty = true
 	}
 	return c
+}
+
+// fillFloor generates a flat floor in a chunk: grass at Y=63, stone Y=59-62.
+func fillFloor(c *Chunk) {
+	grass := BlockStateID("minecraft:grass_block")
+	stone := BlockStateID("minecraft:stone")
+	for x := 0; x < chunkBlockExtent; x++ {
+		for z := 0; z < chunkBlockExtent; z++ {
+			for y := 59; y < 63; y++ {
+				c.SetBlock(x, y, z, stone)
+			}
+			c.SetBlock(x, 63, z, grass)
+		}
+	}
 }
 
 // chunkOf returns the chunk owning world coordinate x,z, or nil.
@@ -174,19 +190,4 @@ func (w *World) GetBlock(x, y, z int) int32 {
 		return 0
 	}
 	return c.GetBlock(x, y, z)
-}
-
-// fillSpawnPlatform fills chunk (0,0) with a small stone/grass platform so
-// players spawn on solid ground they can mine.
-func (w *World) fillSpawnPlatform() {
-	grass := BlockStateID("minecraft:grass_block")
-	stone := BlockStateID("minecraft:stone")
-	for x := 0; x < chunkBlockExtent; x++ {
-		for z := 0; z < chunkBlockExtent; z++ {
-			for y := 59; y < 63; y++ {
-				w.SetBlock(x, y, z, stone)
-			}
-			w.SetBlock(x, 63, z, grass)
-		}
-	}
 }

@@ -29,6 +29,7 @@ const (
 	PlayIDBlockChangedAck     int32 = 0x04
 	PlayIDSectionBlocksUpdate int32 = 0x54
 	PlayIDSetContainerContent int32 = 0x12
+	PlayIDUnloadChunk         int32 = 0x25
 
 	// Serverbound
 	PlayIDConfirmTeleport  int32 = 0x00
@@ -534,4 +535,15 @@ func DecodeSetCreativeModeSlot(data []byte) (SetCreativeModeSlot, error) {
 		return s, err
 	}
 	return s, nil
+}
+
+// EncodeUnloadChunk builds the Unload Chunk payload (Play 0x25, S→C). Field
+// order is Z then X, both Int (not VarInt) — the client reads this packet as
+// one big-endian Long with Z in the upper 32 bits, so the order matters and
+// differs from Set Center Chunk (which uses VarInt).
+func EncodeUnloadChunk(chunkX, chunkZ int32) []byte {
+	var b bytes.Buffer
+	_ = WriteInt32(&b, chunkZ) // Z first
+	_ = WriteInt32(&b, chunkX)
+	return b.Bytes()
 }
