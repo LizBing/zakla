@@ -20,6 +20,8 @@ type Player struct {
 	Name     string
 	UUID     protocol.UUID
 	EntityID int32
+	heldSlot int32    // selected hotbar slot 0-8
+	hotbar   [9]int32 // item ids in the 9 hotbar slots (inventory slots 36-44); 0 = empty
 }
 
 // Server is the Minecraft server.

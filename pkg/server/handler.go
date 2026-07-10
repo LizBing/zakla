@@ -251,7 +251,24 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	}
 	_ = conn.WritePacket(protocol.PlayIDSetHealth, protocol.EncodeSetHealth(20, 20, 5))
 
+	// Inventory: fill the hotbar (inventory slots 36-44) with a starter set of
+	// placeable blocks, and mirror the ids into player.hotbar so the server
+	// knows what the player is holding.
 	player := &Player{conn: conn, Name: name, UUID: uuid, EntityID: entityID}
+	starter := []string{
+		"minecraft:stone", "minecraft:grass_block", "minecraft:dirt",
+		"minecraft:cobblestone", "minecraft:oak_planks", "minecraft:glass",
+		"minecraft:oak_log", "minecraft:sand", "minecraft:gravel",
+	}
+	slots := make([]protocol.SlotData, 46)
+	for i, blk := range starter {
+		id := ItemID(blk)
+		player.hotbar[i] = id
+		slots[36+i] = protocol.SlotData{ItemID: id, Count: 64}
+	}
+	_ = conn.WritePacket(protocol.PlayIDSetContainerContent, protocol.EncodeSetContainerContent(0, 0, slots, protocol.EmptySlot))
+	_ = conn.WritePacket(protocol.PlayIDSetHeldItem, protocol.EncodeSetHeldItem(0))
+
 	s.addPlayer(player)
 	s.broadcastChat(fmt.Sprintf("§e%s joined the game", name))
 
@@ -299,6 +316,34 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			// Every Player Action carrying a sequence must be acked, or the
 			// client freezes further block edits.
 			_ = conn.WritePacket(protocol.PlayIDBlockChangedAck, protocol.EncodeBlockChangedAck(act.Sequence))
+		case protocol.PlayIDUseItemOn:
+			u, uErr := protocol.DecodeUseItemOn(data)
+			if uErr != nil {
+				log.Printf("[%s] invalid use item on: %v", name, uErr)
+				break
+			}
+			// Place the held block (if any) at clicked-location + face offset,
+			// but only into an empty cell. The ack must be sent regardless or
+			// the client reverts the placement (ghost block).
+			if held := player.hotbar[int(player.heldSlot)]; held > 0 {
+				if blkName, ok := itemIDToName[held]; ok {
+					if blkState := BlockStateID(blkName); blkState != 0 {
+						x, y, z := u.Position.Decode()
+						dx, dy, dz := protocol.FaceOffset(u.Face)
+						nx, ny, nz := x+dx, y+dy, z+dz
+						if s.world.GetBlock(nx, ny, nz) == 0 {
+							s.world.SetBlock(nx, ny, nz, blkState)
+							s.broadcastBlockUpdate(protocol.EncodePosition(nx, ny, nz), blkState)
+							log.Printf("[%s] placed %s at (%d,%d,%d)", name, blkName, nx, ny, nz)
+						}
+					}
+				}
+			}
+			_ = conn.WritePacket(protocol.PlayIDBlockChangedAck, protocol.EncodeBlockChangedAck(u.Sequence))
+		case protocol.PlayIDSetCarriedItemSB:
+			if slot, sErr := protocol.DecodeSetCarriedItem(data); sErr == nil && slot >= 0 && slot < 9 {
+				player.heldSlot = slot
+			}
 		default:
 			// unhandled; ignore
 		}

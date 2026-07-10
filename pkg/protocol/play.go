@@ -28,17 +28,19 @@ const (
 	PlayIDBlockUpdate         int32 = 0x08
 	PlayIDBlockChangedAck     int32 = 0x04
 	PlayIDSectionBlocksUpdate int32 = 0x54
+	PlayIDSetContainerContent int32 = 0x12
 
 	// Serverbound
-	PlayIDConfirmTeleport int32 = 0x00
-	PlayIDChatMessage     int32 = 0x09
-	PlayIDKeepAliveSB     int32 = 0x1C
-	PlayIDPlayerPosRot    int32 = 0x1F
-	PlayIDPlayerLoaded    int32 = 0x2C
-	PlayIDClientTickEnd   int32 = 0x0D
-	PlayIDClientInfoSB    int32 = 0x0E
-	PlayIDPlayerAction    int32 = 0x29
-	PlayIDUseItemOn       int32 = 0x42
+	PlayIDConfirmTeleport  int32 = 0x00
+	PlayIDChatMessage      int32 = 0x09
+	PlayIDKeepAliveSB      int32 = 0x1C
+	PlayIDPlayerPosRot     int32 = 0x1F
+	PlayIDPlayerLoaded     int32 = 0x2C
+	PlayIDClientTickEnd    int32 = 0x0D
+	PlayIDClientInfoSB     int32 = 0x0E
+	PlayIDPlayerAction     int32 = 0x29
+	PlayIDUseItemOn        int32 = 0x42
+	PlayIDSetCarriedItemSB int32 = 0x35
 )
 
 // Game events (Game Event packet).
@@ -374,4 +376,74 @@ func DecodeUseItemOn(data []byte) (UseItemOn, error) {
 		return u, err
 	}
 	return u, nil
+}
+
+// --- Inventory packets (PVN 776) ---
+
+// SlotData is one inventory slot. Count <= 0 means empty.
+type SlotData struct {
+	ItemID int32 // vanilla item protocol id (0 = air)
+	Count  int32
+}
+
+// EmptySlot is a convenience value for an empty inventory slot.
+var EmptySlot = SlotData{}
+
+// EncodeSlot writes an item stack in the 26.2 (1.20.5+) component format:
+// count (VarInt; 0 = empty and nothing follows) + optional item id +
+// 0 components-to-add + 0 components-to-remove. Plain block items need no
+// components. Writing the old `present bool + NBT` format will crash the client.
+func EncodeSlot(w *bytes.Buffer, s SlotData) {
+	if s.Count <= 0 {
+		_ = WriteVarInt(w, 0) // empty slot: just a VarInt 0
+		return
+	}
+	_ = WriteVarInt(w, s.Count)
+	_ = WriteVarInt(w, s.ItemID)
+	_ = WriteVarInt(w, 0) // number of components to add
+	_ = WriteVarInt(w, 0) // number of components to remove
+}
+
+// EncodeSetContainerContent builds the Set Container Content payload (Play 0x12,
+// S→C): a full window snapshot. Window id 0 is the player inventory (46 slots:
+// 0 craft output, 1-4 craft input, 5-8 armor, 9-35 main, 36-44 hotbar, 45 off).
+func EncodeSetContainerContent(windowID, stateID int32, slots []SlotData, carried SlotData) []byte {
+	var b bytes.Buffer
+	_ = WriteVarInt(&b, windowID)
+	_ = WriteVarInt(&b, stateID)
+	_ = WriteVarInt(&b, int32(len(slots)))
+	for _, s := range slots {
+		EncodeSlot(&b, s)
+	}
+	EncodeSlot(&b, carried)
+	return b.Bytes()
+}
+
+// DecodeSetCarriedItem reads the Set Carried Item payload (Play 0x35, C→S):
+// the hotbar slot (0-8) the player switched to (Short).
+func DecodeSetCarriedItem(data []byte) (int32, error) {
+	r := bytes.NewReader(data)
+	s, err := ReadInt16(r)
+	return int32(s), err
+}
+
+// FaceOffset returns the (dx,dy,dz) placement offset for a Use Item On face
+// enum value (0=-Y, 1=+Y, 2=-Z, 3=+Z, 4=-X, 5=+X). The new block goes at the
+// clicked location plus this offset.
+func FaceOffset(face int32) (dx, dy, dz int) {
+	switch face {
+	case 0:
+		return 0, -1, 0
+	case 1:
+		return 0, 1, 0
+	case 2:
+		return 0, 0, -1
+	case 3:
+		return 0, 0, 1
+	case 4:
+		return -1, 0, 0
+	case 5:
+		return 1, 0, 0
+	}
+	return 0, 0, 0
 }
