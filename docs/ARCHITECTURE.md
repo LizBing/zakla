@@ -124,13 +124,20 @@ python3 scripts/gen_classpath.py   # 或见仓库内实现
   --quickPlayMultiplayer "localhost:25565"
 ```
 
+## 世界持久化
+
+世界用 gob 存到 `<world.name>/world.gob`（自定义简化格式，非 vanilla Anvil）：
+- `World.Save()` 原子写（tmp + rename），防崩溃损坏；只存非空 section（gob 不能编码含 nil 元素的定长数组，故用 `[]sectionEntry` 带 index）。
+- 启动 `LoadWorld`（文件不存在则新世界 + 预填 spawn）；30s ticker 定期保存；`Stop` 关闭保存——崩溃最多丢最后 30s 编辑。
+- 持久化往返测试（`t.TempDir`，portable）。真实环境验证：挖/放后重启服务端，加载 81 chunks，挖掉的方块保持 air、未动的保持原样。
+
 ## 已完成 & 后续
 
-vanilla 数据层已落地：从 `26.2.jar` 的 `data/`（client.jar）生成同步 registry + tags（`vanilla_data.go` / `vanilla_tags.go`），block state id 从 Mojang reports 生成（`block_states.go`），都编译进服务端。
+vanilla 数据层已落地：从 `26.2.jar` 的 `data/`（client.jar）生成同步 registry + tags（`vanilla_data.go` / `vanilla_tags.go`），block state id / item id 从 Mojang reports 生成（`block_states.go` / `items.go`），都编译进服务端。
 
-方块挖掘 MVP 已落地并经真实客户端验证（进入非空世界 + 协议链路）。
+方块挖掘 + 放置 + 世界持久化均已落地并经真实客户端验证。
 
 后续：
-- **方块放置**：需物品栏 + item→block 映射 + Use Item On (0x42) 处理。
-- **多 chunk 视距**：当前只发出生点 (0,0)，未来按 view distance 发送。
-- **世界持久化 / 同步优化**：Section Blocks Update 批量、存档读写。
+- **方块物理**：沙子重力 / 水流动 / 农作物生长需 tick 引擎（RandomTick/ScheduledTick + 方块行为）。
+- **多 chunk 视距**：当前固定发 spawn 周围 9×9，未来按玩家位置动态发送。
+- **同步优化**：Section Blocks Update 批量、Anvil 存档兼容（目前是自定义 gob 格式，不与 vanilla 世界互通）。
