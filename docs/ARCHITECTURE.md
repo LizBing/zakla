@@ -83,13 +83,21 @@ S→C Block Changed Ack (sequence)         ← 必须回，否则客户端冻结
 2. 缺 `world_clock` registry → 客户端 `Unbound values in world_clock` 崩溃
 3. registry / tags 不完整 → 客户端 `FinishConfiguration` 时校验失败（dimension_type 缺 `infiniburn_overworld` tag、timeline 缺 `in_overworld` tag 等）
 
-## 方块交互（挖掘 MVP）
+## 方块交互（挖掘 + 放置）
 
-方块交互分两步走：先**挖掘 MVP**（破坏方块），放置（需物品栏 + item→block 映射）留作后续。
-
+### 挖掘
 - **block state id** 不在 client.jar（运行时计算），用 **Mojang reports**（`server.jar --reports` → `reports/blocks.json`）拿到计算好的数字 id，生成 `block_states.go`。prismarine-data 没有 26.2，1.21.9 的 id 对不上 26.2 新方块（硫/朱砂），不可用。
 - **挖掘流程**：客户端发 Player Action（Status=2 Finished）→ 服务端 `World.SetBlock(air)` → `broadcastBlockUpdate`（广播给所有在线玩家，含挖掘者）→ 回 `Block Changed Ack`。任何 Player Action（含 Started/Cancelled 等非破坏动作）都要回 ack。
-- **验证**：mock 客户端自动验证协议链路（发 Player Action → 收 Block Update(air) + Ack）；真实客户端验证 spawn 平台渲染（间接 paletted container 位打包，曾只验证过全空气的单值模式）。
+
+### 放置
+- **item id** ≠ block state id（两套注册表）。从 reports/registries.json 的 `minecraft:item` 生成 `items.go`。多数方块 item 与 block 同名，故 `item name → BlockStateID(name)` 即得 block state（少数例外如 redstone/redstone_wire 暂未处理）。
+- **物品栏**：`Set Container Content (0x12)` 发整个 player inventory（window id=0，46 槽；**hotbar 是 slot 36-44，不是 0-8**）。**Slot 用 1.20.5+ data component 格式**：`count(VarInt)` 在前，count=0 即空槽（单字节 0x00，后面无数据）；count>0 才跟 `item id(VarInt) + 组件add数(0) + 组件remove数(0)`。写成旧 `present bool + NBT` 会让客户端崩。
+- **放置流程**：玩家右键 → `Use Item On (0x42, position + face)` → 服务端查手持 item（`Player.hotbar[heldSlot]`）→ item name → BlockStateID → 新位置（`position + face 偏移`，face 0=-Y..5=+X）→ 若该格为空则 `SetBlock` → `broadcastBlockUpdate` → `BlockChangedAck`。ack 必须回，否则客户端回滚（ghost block）。
+- **Set Carried Item (0x35, C→S)**：玩家按数字键切 hotbar，服务端跟踪 `heldSlot`。
+- **不含方块物理**：沙子重力 / 水流动 / 农作物生长等需要 tick 引擎（RandomTick/ScheduledTick + 方块行为），与"放方块"是两套机制，留作后续。
+
+### 验证
+mock 客户端自动验证挖掘协议链路；真实 26.2 客户端验证渲染（间接 paletted container）、挖掘、放置（hotbar 9 种方块 + 右键放置 + 位置正确）。
 
 ## 自动化调试方法
 
