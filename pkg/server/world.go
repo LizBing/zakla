@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -243,7 +244,12 @@ var gravityBlockNames = map[string]bool{
 
 func isGravityBlock(stateID int32) bool {
 	name, ok := blockStateName[stateID]
-	return ok && gravityBlockNames[name]
+	if !ok {
+		return false
+	}
+	// Exact names for the irregular gravity blocks, plus a suffix match for the
+	// 16 concrete powder colors (white_concrete_powder … black_concrete_powder).
+	return gravityBlockNames[name] || strings.HasSuffix(name, "_concrete_powder")
 }
 
 // isReplaceable reports whether a falling block can move into a cell. Gravity
