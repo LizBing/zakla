@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/zakla/mc-server/pkg/config"
 	mcnet "github.com/zakla/mc-server/pkg/net"
@@ -43,8 +44,16 @@ type Server struct {
 // spawn platform pre-filled.
 func New(cfg *config.Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	world := NewWorld()
-	world.fillSpawnPlatform()
+	world, err := LoadWorld(cfg.World.Name)
+	if err != nil {
+		log.Fatalf("load world %q: %v", cfg.World.Name, err)
+	}
+	if world.ChunkCount() == 0 {
+		world.fillSpawnPlatform() // first run: seed spawn platform
+		if err := world.Save(); err != nil {
+			log.Printf("initial world save: %v", err)
+		}
+	}
 	return &Server{
 		cfg:     cfg,
 		players: make(map[protocol.UUID]*Player),
@@ -62,6 +71,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	log.Printf("Minecraft server listening on %s (protocol %d, version 26.2)", addr, protocol.ProtocolVersion)
+	go s.saveLoop(s.ctx)
 	<-s.ctx.Done()
 	return s.Stop()
 }
@@ -83,8 +93,28 @@ func (s *Server) Stop() error {
 		_ = c.Close()
 	}
 	s.wg.Wait()
+	if err := s.world.Save(); err != nil {
+		log.Printf("final world save: %v", err)
+	}
 	log.Println("Server stopped")
 	return nil
+}
+
+// saveLoop periodically persists the world so a crash never loses more than
+// the last interval of edits.
+func (s *Server) saveLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.world.Save(); err != nil {
+				log.Printf("world save: %v", err)
+			}
+		}
+	}
 }
 
 // HandleConnection satisfies mcnet.ConnectionHandler.

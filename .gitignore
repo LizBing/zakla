@@ -17,6 +17,9 @@
 # Docker image exports
 *.tar
 
+# Runtime world data (persisted chunks, generated at runtime)
+/world/
+
 # NOTE: pkg/server/vanilla_data.go and vanilla_tags.go are GENERATED from the
 # 26.2 client.jar (scripts/gen_registries.py / gen_tags.py) but ARE committed
 # so the project builds standalone. Re-run the generators after a version bump.
