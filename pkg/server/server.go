@@ -28,6 +28,7 @@ type Player struct {
 
 	lastChunkX, lastChunkZ int32             // last chunk the player was known to be in
 	sentChunks             map[chunkKey]bool // chunks the client currently has loaded
+	flying                 bool              // creative flight (persisted across reconnects)
 }
 
 // Server is the Minecraft server.
@@ -77,6 +78,7 @@ func (s *Server) Start() error {
 	}
 	log.Printf("Minecraft server listening on %s (protocol %d, version 26.2)", addr, protocol.ProtocolVersion)
 	go s.saveLoop(s.ctx)
+	go s.tickLoop(s.ctx)
 	<-s.ctx.Done()
 	return s.Stop()
 }
@@ -117,6 +119,23 @@ func (s *Server) saveLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := s.world.Save(); err != nil {
 				log.Printf("world save: %v", err)
+			}
+		}
+	}
+}
+
+// tickLoop runs the world tick engine at 20 TPS (50ms) and broadcasts the
+// resulting block changes (gravity, etc.) to all online players.
+func (s *Server) tickLoop(ctx context.Context) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, c := range s.world.Tick() {
+				s.broadcastBlockUpdate(protocol.EncodePosition(c.X, c.Y, c.Z), c.StateID)
 			}
 		}
 	}

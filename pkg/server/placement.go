@@ -19,6 +19,8 @@ var itemBlockOverride = map[string]string{
 	"minecraft:sweet_berries":     "minecraft:sweet_berry_bush",
 	"minecraft:glow_berries":      "minecraft:cave_vines",
 	"minecraft:cocoa_beans":       "minecraft:cocoa",
+	"minecraft:water_bucket":      "minecraft:water",
+	"minecraft:lava_bucket":       "minecraft:lava",
 }
 
 // ItemToBlockName returns the block name a given item places, applying the

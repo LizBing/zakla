@@ -16,6 +16,7 @@ type playerData struct {
 	HeldSlot   int32
 	X, Y, Z    float64
 	Yaw, Pitch float32
+	Flying     bool
 }
 
 // invSlot is one inventory slot in the persisted form.

@@ -92,7 +92,8 @@ func decodePalettedContainer(data []byte, n, maxIndirect int) (entries []int32, 
 		}
 	}
 
-	longCount := (n*bpe + 63) / 64
+	entriesPerLong := 64 / bpe
+	longCount := (n + entriesPerLong - 1) / entriesPerLong
 	longs := make([]uint64, longCount)
 	for i := range longs {
 		var raw [8]byte
@@ -105,13 +106,7 @@ func decodePalettedContainer(data []byte, n, maxIndirect int) (entries []int32, 
 	mask := (uint64(1) << uint(bpe)) - 1
 	entries = make([]int32, n)
 	for i := 0; i < n; i++ {
-		bitIndex := i * bpe
-		longIdx := bitIndex / 64
-		bitOff := bitIndex % 64
-		v := (longs[longIdx] >> uint(bitOff)) & mask
-		if bitOff+bpe > 64 && longIdx+1 < len(longs) {
-			v |= (longs[longIdx+1] << uint(64-bitOff)) & mask
-		}
+		v := (longs[i/entriesPerLong] >> uint((i%entriesPerLong)*bpe)) & mask
 		if palette != nil {
 			if int(v) >= len(palette) {
 				return nil, nil, fmt.Errorf("palette index %d out of range %d", v, len(palette))

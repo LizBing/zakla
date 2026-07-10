@@ -205,22 +205,19 @@ func encodePalettedContainer(w *bytes.Buffer, entries []int32, minBits, maxIndir
 	writeBitPack(w, indices, bpe)
 }
 
-// writeBitPack flat-packs entries (each bpe bits) into a big-endian long array
-// of ceil(n*bpe/64) longs, with entries allowed to span long boundaries. No
-// length prefix is written (PVN 776 / 1.21.5+).
+// writeBitPack packs entries (each bpe bits) into a big-endian long array
+// WITHOUT spanning long boundaries (1.16+ format): each long holds floor(64/bpe)
+// entries with the high bits as padding; longCount = ceil(N / floor(64/bpe)).
+// No length prefix is written (PVN 776 / 1.21.5+). For bpe that divides 64
+// (e.g. 4) this matches the flat layout; for others (5, 6, 8) it differs.
 func writeBitPack(w *bytes.Buffer, entries []int32, bpe int) {
-	longCount := (len(entries)*bpe + 63) / 64
+	entriesPerLong := 64 / bpe
+	longCount := (len(entries) + entriesPerLong - 1) / entriesPerLong
 	data := make([]uint64, longCount)
 	mask := (uint64(1) << uint(bpe)) - 1
 	for i, e := range entries {
 		v := uint64(e) & mask
-		bitIndex := i * bpe
-		longIdx := bitIndex / 64
-		bitOff := bitIndex % 64
-		data[longIdx] |= v << uint(bitOff)
-		if bitOff+bpe > 64 && longIdx+1 < longCount {
-			data[longIdx+1] |= v >> uint(64-bitOff)
-		}
+		data[i/entriesPerLong] |= v << uint((i%entriesPerLong)*bpe)
 	}
 	var raw [8]byte
 	for _, l := range data {

@@ -230,8 +230,6 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 	// break). value=1.0 = creative.
 	_ = conn.WritePacket(protocol.PlayIDGameEvent, protocol.EncodeGameEvent(protocol.GameEventChangeGameMode, 1.0))
 	_ = conn.WritePacket(protocol.PlayIDChangeDifficulty, protocol.EncodeChangeDifficulty(1, false))
-	// Creative abilities: invulnerable | allow flying | creative (instant break).
-	_ = conn.WritePacket(protocol.PlayIDPlayerAbilities, protocol.EncodePlayerAbilities(0x0D, 0.05, 0.1))
 	_ = conn.WritePacket(protocol.PlayIDSetHeldItem, protocol.EncodeSetHeldItem(0))
 	_ = conn.WritePacket(protocol.PlayIDPlayerInfoUpdate, protocol.EncodePlayerInfoUpdateAdd(uuid, name, 1, true, 0))
 	_ = conn.WritePacket(protocol.PlayIDSetDefaultSpawn, protocol.EncodeSetDefaultSpawn("minecraft:overworld", protocol.EncodePosition(0, 64, 0), 0, 0))
@@ -247,6 +245,7 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		player.heldSlot = pdat.HeldSlot
 		player.x, player.y, player.z = pdat.X, pdat.Y, pdat.Z
 		player.yaw, player.pitch = pdat.Yaw, pdat.Pitch
+		player.flying = pdat.Flying
 		for i, slot := range pdat.Inventory {
 			player.inventory[i] = protocol.SlotData{ItemID: slot.ItemID, Count: slot.Count}
 		}
@@ -260,6 +259,15 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			player.inventory[36+i] = protocol.SlotData{ItemID: ItemID(blk), Count: 64}
 		}
 	}
+
+	// Creative abilities: invulnerable | allow flying | creative (+flying bit
+	// if the player was flying when they last disconnected). Sent after player
+	// data is loaded so the flying flag is known.
+	abilitiesFlags := int8(0x0D)
+	if player.flying {
+		abilitiesFlags |= 0x02
+	}
+	_ = conn.WritePacket(protocol.PlayIDPlayerAbilities, protocol.EncodePlayerAbilities(abilitiesFlags, 0.05, 0.1))
 
 	teleportID := NextTeleportID()
 	_ = conn.WritePacket(protocol.PlayIDSynchPlayerPos, protocol.EncodeSynchronizePlayerPos(teleportID, player.x, player.y, player.z, 0, 0, 0, player.yaw, player.pitch, 0))
@@ -298,6 +306,7 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 			Z:        player.z,
 			Yaw:      player.yaw,
 			Pitch:    player.pitch,
+			Flying:   player.flying,
 		}
 		for i, slot := range player.inventory {
 			dat.Inventory[i] = invSlot{ItemID: slot.ItemID, Count: slot.Count}
@@ -378,7 +387,9 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 						// Only into an empty cell, and not into the player's
 						// own body (foot + head) — vanilla rejects placement
 						// that would intersect the placer's collision box.
-						if s.world.GetBlock(nx, ny, nz) == 0 && !playerOccupies(player, nx, ny, nz) {
+						cur := s.world.GetBlock(nx, ny, nz)
+						// Place into air or fluid (water/lava are replaceable).
+						if (cur == 0 || isFluid(cur)) && !playerOccupies(player, nx, ny, nz) {
 							s.world.SetBlock(nx, ny, nz, blkState)
 							s.broadcastBlockUpdate(protocol.EncodePosition(nx, ny, nz), blkState)
 							log.Printf("[%s] placed %s at (%d,%d,%d)", name, blkName, nx, ny, nz)
@@ -390,6 +401,11 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 		case protocol.PlayIDSetCarriedItemSB:
 			if slot, sErr := protocol.DecodeSetCarriedItem(data); sErr == nil && slot >= 0 && slot < 9 {
 				player.heldSlot = slot
+			}
+		case protocol.PlayIDPlayerAbilitiesSB:
+			// Client toggled flight; remember it so it persists across reconnects.
+			if flags, err := protocol.DecodePlayerAbilitiesSB(data); err == nil {
+				player.flying = flags&0x02 != 0
 			}
 		case protocol.PlayIDSetCreativeSlot:
 			// Creative player placed an item into a slot (hotbar or main

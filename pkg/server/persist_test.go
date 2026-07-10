@@ -24,8 +24,9 @@ func TestWorldSaveLoadRoundTrip(t *testing.T) {
 	if got := w2.GetBlock(2, 63, 2); got != 1 {
 		t.Errorf("(2,63,2) = %d, want 1 (stone)", got)
 	}
-	if got := w2.GetBlock(5, 63, 5); got != 0 {
-		t.Errorf("untouched (5,63,5) = %d, want 0 (air)", got)
+	// Y=63 is the generated floor (grass); Y=64 above it should be air.
+	if got := w2.GetBlock(5, 64, 5); got != 0 {
+		t.Errorf("untouched (5,64,5) = %d, want 0 (air)", got)
 	}
 	if w2.ChunkCount() != w.ChunkCount() {
 		t.Errorf("chunk count = %d, want %d", w2.ChunkCount(), w.ChunkCount())

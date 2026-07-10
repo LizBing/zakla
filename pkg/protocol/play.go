@@ -32,17 +32,18 @@ const (
 	PlayIDUnloadChunk         int32 = 0x25
 
 	// Serverbound
-	PlayIDConfirmTeleport  int32 = 0x00
-	PlayIDChatMessage      int32 = 0x09
-	PlayIDKeepAliveSB      int32 = 0x1C
-	PlayIDPlayerPosRot     int32 = 0x1F
-	PlayIDPlayerLoaded     int32 = 0x2C
-	PlayIDClientTickEnd    int32 = 0x0D
-	PlayIDClientInfoSB     int32 = 0x0E
-	PlayIDPlayerAction     int32 = 0x29
-	PlayIDUseItemOn        int32 = 0x42
-	PlayIDSetCarriedItemSB int32 = 0x35
-	PlayIDSetCreativeSlot  int32 = 0x38
+	PlayIDConfirmTeleport   int32 = 0x00
+	PlayIDChatMessage       int32 = 0x09
+	PlayIDKeepAliveSB       int32 = 0x1C
+	PlayIDPlayerPosRot      int32 = 0x1F
+	PlayIDPlayerLoaded      int32 = 0x2C
+	PlayIDClientTickEnd     int32 = 0x0D
+	PlayIDClientInfoSB      int32 = 0x0E
+	PlayIDPlayerAction      int32 = 0x29
+	PlayIDUseItemOn         int32 = 0x42
+	PlayIDSetCarriedItemSB  int32 = 0x35
+	PlayIDSetCreativeSlot   int32 = 0x38
+	PlayIDPlayerAbilitiesSB int32 = 0x28
 )
 
 // Game events (Game Event packet).
@@ -535,6 +536,13 @@ func DecodeSetCreativeModeSlot(data []byte) (SetCreativeModeSlot, error) {
 		return s, err
 	}
 	return s, nil
+}
+
+// DecodePlayerAbilitiesSB reads the serverbound Player Abilities payload
+// (Play 0x28, C→S): a single flags byte where bit 0x02 = is flying.
+func DecodePlayerAbilitiesSB(data []byte) (uint8, error) {
+	r := bytes.NewReader(data)
+	return ReadUint8(r)
 }
 
 // EncodeUnloadChunk builds the Unload Chunk payload (Play 0x25, S→C). Field
