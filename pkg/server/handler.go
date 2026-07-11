@@ -368,6 +368,11 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 						s.broadcastBlockUpdate(protocol.EncodePosition(px, py, pz), 0)
 					}
 				}
+				// A broken block may have been a fence/wall connection point:
+				// recompute adjacent fences/walls so they drop the link.
+				for _, off := range [][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}} {
+					s.reconnectConnectable(x+off[0], y+off[1], z+off[2])
+				}
 				log.Printf("[%s] mined block (%d,%d,%d) -> air, ack seq=%d", name, x, y, z, act.Sequence)
 			}
 			// Every Player Action carrying a sequence must be acked, or the
@@ -398,15 +403,22 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 					if len(placements) > 0 {
 						x, y, z := u.Position.Decode()
 						canPlace := true
-						// Attachable blocks (buttons, redstone dust, torches, rails,
-						// …) must attach to a SOLID block — the one that was
-						// clicked. This stops them floating on each other (dust on
-						// dust, button on button).
-						if needsSolidSupport(blkName) && !isSolidBlock(s.world.GetBlock(x, y, z)) {
-							canPlace = false
-						}
 						dx, dy, dz := protocol.FaceOffset(u.Face)
 						bx, by, bz := x+dx, y+dy, z+dz
+						// Attachable blocks (buttons, redstone dust, torches, rails,
+						// signs …) must attach to a solid block — the one clicked.
+						// Stops floating (dust on dust, button on button, …).
+						if needsSolidSupport(blkName) && !supportOK(blkName, s.world.GetBlock(x, y, z)) {
+							// Fallback for torches/signs clicked against a non-supporting
+							// block (e.g. a glass pane): if the cell we'd place into sits
+							// on solid ground, stand the torch/sign on that ground instead
+							// — "click the pane, torch stands on the ground beside it."
+							if canStandOnGround(blkName) && isSolidBlock(s.world.GetBlock(bx, by-1, bz)) {
+								placements = resolvePlacements(blkName, faceUp, player.yaw, u.CursorY)
+							} else {
+								canPlace = false
+							}
+						}
 						// Every target cell must be air/fluid and not intersect
 						// the player; otherwise reject the whole placement.
 						for _, p := range placements {
@@ -430,6 +442,18 @@ func (s *Server) handlePlay(conn *mcnet.Connection, name string, uuid protocol.U
 								s.world.SetBlock(cx, cy, cz, blkState)
 								s.broadcastBlockUpdate(protocol.EncodePosition(cx, cy, cz), blkState)
 								log.Printf("[%s] placed %s at (%d,%d,%d)", name, p.name, cx, cy, cz)
+							}
+							// Refresh fence/wall connections around the placed
+							// cell(s): the placed fence/wall itself, plus any
+							// neighbor fence/wall that should now link to the new
+							// block — including a fence next to a just-placed gate
+							// or solid. reconnectConnectable is a no-op on non-connectables.
+							for _, p := range placements {
+								cx, cy, cz := bx+p.dx, by+p.dy, bz+p.dz
+								s.reconnectConnectable(cx, cy, cz)
+								for _, off := range [][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}} {
+									s.reconnectConnectable(cx+off[0], cy+off[1], cz+off[2])
+								}
 							}
 						}
 					}

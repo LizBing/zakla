@@ -194,3 +194,21 @@ func (s *Server) broadcastBlockUpdate(pos protocol.Position, stateID int32) {
 		_ = c.WritePacket(protocol.PlayIDBlockUpdate, payload)
 	}
 }
+
+// reconnectConnectable recomputes a connectable block's (fence/wall/glass pane/
+// iron bars/redstone dust) connection properties from its neighbors and
+// writes+broadcasts it if the resolved state changed. No-op for other blocks.
+func (s *Server) reconnectConnectable(x, y, z int) {
+	cur := s.world.GetBlock(x, y, z)
+	name, ok := blockStateName[cur]
+	if !ok || !isConnectable(name) {
+		return
+	}
+	props := connectionProps(s.world.GetBlock, x, y, z)
+	ns := ResolveStateID(name, props)
+	if ns == 0 || ns == cur {
+		return
+	}
+	s.world.SetBlock(x, y, z, ns)
+	s.broadcastBlockUpdate(protocol.EncodePosition(x, y, z), ns)
+}

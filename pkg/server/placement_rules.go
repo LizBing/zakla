@@ -1,6 +1,8 @@
 package server
 
 import (
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +28,8 @@ const (
 	ruleButtonLever             // buttons + lever: face + facing
 	ruleSlab                    // type=clicked face
 	ruleTorch                   // torch/redstone_torch/soul_torch: floor vs wall
+	ruleSign                    // signs: standing (ground) vs wall variant
+	ruleHangingSign             // hanging signs: ceiling/ground vs wall variant
 	ruleFencePost               // fence/wall: standalone post (no neighbor connect)
 	ruleLook                    // stairs/fence_gate: facing = player look dir
 	ruleAnvil                   // anvil: facing ⟂ look (its long axis is perpendicular to the player)
@@ -39,6 +43,54 @@ var torchWallVariant = map[string]string{
 	"minecraft:torch":          "minecraft:wall_torch",
 	"minecraft:redstone_torch": "minecraft:redstone_wall_torch",
 	"minecraft:soul_torch":     "minecraft:soul_wall_torch",
+}
+
+// isRegularSign reports whether a name is a (non-hanging) sign item/block that
+// dispatches between standing and wall variants.
+func isRegularSign(name string) bool {
+	return strings.HasSuffix(name, "_sign") && !strings.HasSuffix(name, "_hanging_sign")
+}
+
+// wallSignVariant maps a standing sign name to its wall variant
+// (oak_sign → oak_wall_sign).
+func wallSignVariant(name string) string {
+	return strings.Replace(name, "_sign", "_wall_sign", 1)
+}
+
+// wallHangingSignVariant maps a hanging sign name to its wall variant
+// (oak_hanging_sign → oak_wall_hanging_sign).
+func wallHangingSignVariant(name string) string {
+	return strings.Replace(name, "_hanging_sign", "_wall_hanging_sign", 1)
+}
+
+// signRotation maps a player yaw to a standing/hanging sign rotation (0-15),
+// one step per 22.5°. Per minecraft.wiki the sign faces TOWARD the placer, so
+// this is 180° (8 steps) off the raw look direction.
+func signRotation(yaw float32) string {
+	r := int(math.Floor(float64(yaw)/22.5+0.5)) + 8
+	for r < 0 {
+		r += 16
+	}
+	for r >= 16 {
+		r -= 16
+	}
+	return strconv.Itoa(r)
+}
+
+// signRotation4 maps a player yaw to one of the 4 cardinal hanging-sign
+// rotations (0/4/8/12), snapped to the nearest, with the same +8 faces-player
+// offset. Per minecraft.wiki a hanging sign under/over a wide block only has 4
+// directions (parallel chains); the 16-direction up-arrow variant (narrow
+// block / sneak) is not handled here.
+func signRotation4(yaw float32) string {
+	r := int(math.Floor(float64(yaw)/90+0.5))*4 + 8
+	for r < 0 {
+		r += 16
+	}
+	for r >= 16 {
+		r -= 16
+	}
+	return strconv.Itoa(r)
 }
 
 // classifyBlock picks the placement rule for a block name. Checked in an order
@@ -56,6 +108,10 @@ func classifyBlock(name string) ruleKind {
 		return ruleSlab
 	case torchWallVariant[name] != "" || strings.HasSuffix(name, "_wall_torch"):
 		return ruleTorch
+	case isRegularSign(name):
+		return ruleSign
+	case strings.HasSuffix(name, "_hanging_sign"):
+		return ruleHangingSign
 	case strings.HasSuffix(name, "_fence_gate"):
 		return ruleLook
 	case strings.HasSuffix(name, "_fence"):
@@ -123,6 +179,30 @@ func resolvePlacement(name string, face int32, yaw, cursorY float32) (string, ma
 			return torchWallVariant[name], map[string]string{"facing": faceToDirection(face)}
 		default: // ceiling: torches can't hang in vanilla → reject
 			return "", nil
+		}
+	case ruleSign:
+		switch face {
+		case faceUp: // on the ground → standing sign, rotation from player yaw
+			return name, map[string]string{"rotation": signRotation(yaw)}
+		case faceNorth, faceSouth, faceWest, faceEast: // on a wall → wall sign facing out
+			return wallSignVariant(name), map[string]string{"facing": faceToDirection(face)}
+		default: // ceiling: regular signs can't hang → reject
+			return "", nil
+		}
+	case ruleHangingSign:
+		switch face {
+		case faceDown: // under a block → hangs from above (ceiling), 4 cardinal dirs
+			return name, map[string]string{"rotation": signRotation4(yaw), "attached": "false"}
+		case faceUp: // on the ground → hanging signs have no standing form (their
+			// chains always reach up to a block above); reject so they can't be
+			// placed on / float above the ground.
+			return "", nil
+		default: // side of a block/pillar → wall hanging sign. Its board renders
+			// PERPENDICULAR to `facing`, so to make the board face the player
+			// (along the clicked-face normal) facing must run ALONG the wall — i.e.
+			// 90° off the clicked face. The board is double-sided, so CW or CCW
+			// both read correctly; we use the 90°-clockwise helper for determinism.
+			return wallHangingSignVariant(name), map[string]string{"facing": horizontalFacingPerp(faceToDirection(face))}
 		}
 	case ruleFencePost:
 		return name, nil // north/south/east/west all default false → standalone post
@@ -224,6 +304,82 @@ func multiBlockBreakOffsets(name string) [][3]int {
 	return nil
 }
 
+// isFenceFamily reports blocks that make a wall render "tall" when next to it:
+// fences, walls, and fence gates.
+func isFenceFamily(name string) bool {
+	return strings.HasSuffix(name, "_fence") || strings.HasSuffix(name, "_wall") ||
+		strings.HasSuffix(name, "_fence_gate")
+}
+
+// isConnectable reports whether a block has north/south/east/west connection
+// properties we recompute from neighbors: fences, walls, glass panes, iron bars,
+// and redstone dust.
+func isConnectable(name string) bool {
+	return isFenceFamily(name) || strings.HasSuffix(name, "_pane") ||
+		name == "minecraft:iron_bars" || name == "minecraft:redstone_wire"
+}
+
+// connectableSide reports whether a block of sourceName should link to the given
+// neighbor. Fences/walls/panes/iron bars connect to solids + any connectable;
+// redstone dust links only to other dust (full redstone power is deferred).
+func connectableSide(sourceName string, state int32) bool {
+	if state == 0 || isFluid(state) {
+		return false
+	}
+	name, ok := blockStateName[state]
+	if !ok {
+		return true // unknown non-air → treat as solid
+	}
+	if sourceName == "minecraft:redstone_wire" {
+		return name == "minecraft:redstone_wire"
+	}
+	return isConnectable(name) || !needsSolidSupport(name)
+}
+
+// connectionProps returns the north/south/east/west connection overrides for a
+// connectable block at (x,y,z), by inspecting its 4 horizontal neighbors via get.
+// Value type depends on the block: fences/panes/iron bars use "true"; walls use
+// "low"/"tall" (tall next to a fence/wall/gate); redstone dust uses "side".
+func connectionProps(get func(int, int, int) int32, x, y, z int) map[string]string {
+	state := get(x, y, z)
+	name, ok := blockStateName[state]
+	if !ok || !isConnectable(name) {
+		return nil
+	}
+	wall := strings.HasSuffix(name, "_wall")
+	dust := name == "minecraft:redstone_wire"
+	props := map[string]string{}
+	if dust {
+		props["power"] = "0" // no redstone power engine yet
+	}
+	sides := []struct {
+		key    string
+		dx, dz int
+	}{
+		{"north", 0, -1}, {"south", 0, 1}, {"west", -1, 0}, {"east", 1, 0},
+	}
+	for _, s := range sides {
+		ns := get(x+s.dx, y, z+s.dz)
+		if !connectableSide(name, ns) {
+			continue
+		}
+		nn, _ := blockStateName[ns]
+		switch {
+		case dust:
+			props[s.key] = "side"
+		case wall:
+			if isFenceFamily(nn) {
+				props[s.key] = "tall"
+			} else {
+				props[s.key] = "low"
+			}
+		default:
+			props[s.key] = "true"
+		}
+	}
+	return props
+}
+
 // horizontalFacing maps a player yaw (degrees, MC convention: 0=south, 90=west,
 // 180=north, 270=east) to the cardinal the player is looking toward.
 func horizontalFacing(yaw float32) string {
@@ -311,6 +467,7 @@ func needsSolidSupport(name string) bool {
 		strings.HasSuffix(name, "_pressure_plate"),
 		strings.HasSuffix(name, "rail"),  // rail, powered_rail, detector_rail, activator_rail
 		strings.HasSuffix(name, "torch"), // torch, wall_torch, redstone_torch, soul_torch, …
+		strings.HasSuffix(name, "_sign"), // signs are non-solid (so buttons/torches can't attach)
 		strings.HasSuffix(name, "_carpet"):
 		return true
 	case name == "minecraft:lever",
@@ -320,6 +477,43 @@ func needsSolidSupport(name string) bool {
 		name == "minecraft:ladder",
 		name == "minecraft:vine":
 		return true
+	}
+	return false
+}
+
+// canStandOnGround reports whether a block has a standing/floor variant we can
+// fall back to when its wall placement is rejected — torches (→ standing torch)
+// and regular signs (→ standing sign). Used so clicking a non-supporting block
+// (e.g. a glass pane) still places the torch/sign on the ground beside it
+// rather than failing.
+func canStandOnGround(name string) bool {
+	return torchWallVariant[name] != "" || isRegularSign(name)
+}
+
+// isSignName reports whether a name is any sign (standing/wall/hanging).
+func isSignName(name string) bool {
+	return strings.HasSuffix(name, "_sign")
+}
+
+// supportOK reports whether a block of placingName can be placed with the given
+// support (the clicked block). Attachables (torches, buttons, signs, ladders,
+// redstone, …) need a solid, FULL-cube face to attach to, so a thin connectable
+// block — fence, wall, glass pane, iron bars, fence gate — is NOT a valid
+// support. The lone exception is regular signs, which vanilla lets stack on
+// another sign (sign-on-sign) even though a sign is itself non-solid.
+func supportOK(placingName string, supportState int32) bool {
+	if isSolidBlock(supportState) {
+		// Thin connectables don't present a full face, so no attachable may be
+		// placed against (or on top of) them.
+		if name, ok := blockStateName[supportState]; ok && isConnectable(name) {
+			return false
+		}
+		return true
+	}
+	if isRegularSign(placingName) {
+		if name, ok := blockStateName[supportState]; ok && isSignName(name) {
+			return true
+		}
 	}
 	return false
 }
